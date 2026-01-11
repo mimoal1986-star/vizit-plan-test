@@ -753,7 +753,7 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
                 ratio = max(lat_range, lon_range) / min(lat_range, lon_range)
                 
                 # ДЕЛАЕМ БАЛАНСИРОВКУ ДЛЯ ЛЮБОГО ratio 
-                if ratio > 1.3:
+                if ratio > 1.1:
                     if lat_range > lon_range:
                         # Сжимаем более длинную ось (широту)
                         scale_factor = lon_range / lat_range
@@ -766,6 +766,20 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
                         scaled_coords[:, 1] = scaled_coords[:, 1] * scale_factor
                         # Для отладки можно добавить:
                         # print(f"Сжали долготу в {scale_factor:.2f} раз")
+                # Гарантируем max ratio = 1.5
+                final_lat_range = scaled_coords[:, 0].max() - scaled_coords[:, 0].min()
+                final_lon_range = scaled_coords[:, 1].max() - scaled_coords[:, 1].min()
+                final_ratio = max(final_lat_range, final_lon_range) / min(final_lat_range, final_lon_range)
+                
+                if final_ratio > 1.5:
+                    # Принудительно доводим до 1.5
+                    force_factor = 1.5 / final_ratio
+                    if final_lat_range > final_lon_range:
+                        scaled_coords[:, 0] *= force_factor
+                    else:
+                        scaled_coords[:, 1] *= force_factor
+                    
+        print(f"Принудительная коррекция: {final_ratio:.2f} → 1.5")
             
             # Кластеризация KMeans
             kmeans = KMeans(
@@ -3283,6 +3297,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
