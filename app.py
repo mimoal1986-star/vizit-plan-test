@@ -774,14 +774,14 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
                 if 0 <= label < K:
                     daily_clusters[label].append(point)
             
-        except ImportError:
-            # Если нет sklearn, используем простую географическую сортировку
-            st.warning("⚠️ Установите scikit-learn для лучшей кластеризации")
-            return simple_geographic_distribution(valid_points, working_days, auditor_id)
-        
-        except Exception as e:
-            st.error(f"❌ Ошибка кластеризации: {str(e)}")
-            return simple_geographic_distribution(valid_points, working_days, auditor_id)
+            except ImportError:
+                # Если нет sklearn, используем простую географическую сортировку
+                st.warning("⚠️ Установите scikit-learn для лучшей кластеризации")
+                return simple_geographic_distribution(valid_points, working_days, auditor_id)
+            
+            except Exception as e:
+                st.error(f"❌ Ошибка кластеризации: {str(e)}")
+                return simple_geographic_distribution(valid_points, working_days, auditor_id)
         
         # === 5. БАЛАНСИРОВКА КЛАСТЕРОВ ===
         # Перераспределяем точки если кластеры сильно различаются по размеру
@@ -3275,6 +3275,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
