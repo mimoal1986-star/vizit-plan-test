@@ -9,13 +9,12 @@ except ImportError:
 import streamlit as st
 import pandas as pd
 import numpy as np
-import math
 import io
 from datetime import datetime, date, timedelta
 import calendar
 import json
 import base64
-from typing import Dict, List, Tuple, Optional, Any, Callable
+from typing import Dict, List, Tuple, Optional, Any
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -36,13 +35,6 @@ try:
 except:
     SCIPY_AVAILABLE = False
     st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
-
-# Для расчета рабочих дней с праздниками
-try:
-    from workalendar.europe import Russia
-    WORKALENDAR_AVAILABLE = True
-except ImportError:
-    WORKALENDAR_AVAILABLE = False
 
 # НАСТРОЙКА СТРАНИЦЫ
 st.set_page_config(
@@ -117,15 +109,6 @@ with st.sidebar:
     
     *Настройки сохраняются автоматически*
     """)
-
-    st.markdown("---")
-    
-    st.subheader("🎯 Алгоритм разбиения")
-    use_enhanced_split = st.checkbox(
-        "Использовать улучшенное разбиение по неделям", 
-        value=False,
-        help="Разбивает полигоны аудиторов на компактные недельные области с балансировкой ±3 точки"
-    )
 
 # ==============================================
 # ФУНКЦИИ ДЛЯ СОЗДАНИЯ ШАБЛОНОВ
@@ -413,1440 +396,6 @@ def get_weeks_in_quarter(year, quarter):
     return weeks
 
 # ==============================================
-# КЛАСС ДЛЯ ОПТИМИЗАЦИИ МАРШРУТОВ ПО ДНЯМ
-# ==============================================
-
-class WeeklyRouteOptimizer:
-    """
-    Оптимизатор маршрутов на основе логики из optimizer.py
-    Распределяет точки по дням недели и строит оптимальные маршруты
-    """
-    
-    @staticmethod
-    def calculate_distance(lat1, lon1, lat2, lon2):
-        """Расчет расстояния в КИЛОМЕТРАХ между точками"""
-        # 1 градус широты = 111 км
-        km_per_lat = 111.0
-        
-        # Средняя широта для расчета масштаба долготы
-        avg_lat = (lat1 + lat2) / 2
-        km_per_lon = 111.0 * math.cos(math.radians(avg_lat))
-        
-        # Разница в километрах
-        lat_km = (lat2 - lat1) * km_per_lat
-        lon_km = (lon2 - lon1) * km_per_lon
-        
-        # Прямоугольное расстояние (проще для городов)
-        distance_km = abs(lat_km) + abs(lon_km)
-        
-        return distance_km
-    
-    @staticmethod
-    def greedy_route(points):
-        """
-        Жадный алгоритм построения маршрута
-        Начинает с самой дальней точки от центра
-        """
-        if len(points) <= 1:
-            return points
-        
-        # Вычисляем центр всех точек
-        center_lat = np.mean([p['Широта'] for p in points])
-        center_lon = np.mean([p['Долгота'] for p in points])
-        
-        # Находим самую дальнюю точку от центра
-        start_idx = max(range(len(points)),
-                       key=lambda i: WeeklyRouteOptimizer.calculate_distance(
-                           points[i]['Широта'], points[i]['Долгота'],
-                           center_lat, center_lon
-                       ))
-        
-        route = [points[start_idx]]
-        unvisited = points[:start_idx] + points[start_idx+1:]
-        
-        while unvisited:
-            last_point = route[-1]
-            
-            # Находим ближайшую непосещенную точку
-            nearest_idx = min(range(len(unvisited)),
-                key=lambda i: WeeklyRouteOptimizer.calculate_distance(
-                    last_point['Широта'], last_point['Долгота'],
-                    unvisited[i]['Широта'], unvisited[i]['Долгота']
-                ))
-            
-            route.append(unvisited[nearest_idx])
-            unvisited.pop(nearest_idx)
-        
-        return route
-    
-    @staticmethod
-    def distribute_points_to_days(points_list, visits_per_point, working_days):
-        """
-        Распределяет точки по рабочим дням недели
-        points_list: список словарей с точками
-        visits_per_point: сколько раз нужно посетить каждую точку
-        working_days: список дат рабочих дней недели
-        """
-        if not points_list or not working_days:
-            return {}
-        
-        # Создаем список всех посещений
-        all_visits = []
-        for point in points_list:
-            point_id = point['ID_Точки']
-            visits = visits_per_point.get(point_id, 1)
-            for _ in range(visits):
-                all_visits.append(point.copy())
-        
-        # Равномерно распределяем по дням
-        visits_by_day = {}
-        days_count = len(working_days)
-        
-        for i, visit in enumerate(all_visits):
-            day_index = i % days_count
-            day_date = working_days[day_index]
-            
-            if day_date not in visits_by_day:
-                visits_by_day[day_date] = []
-            
-            visits_by_day[day_date].append(visit)
-        
-        return visits_by_day
-    
-    @staticmethod
-    def optimize_week_for_auditor(auditor_points, visits_needed, week_dates, auditor_id):
-        """
-        Оптимизирует маршруты для аудитора на неделю
-        Возвращает список визитов с указанием дня недели
-        """
-        results = []
-        
-        # Определяем рабочие дни (понедельник-пятница)
-        working_days = []
-        for day_date in week_dates:
-            # Проверяем что это datetime/date объект
-            if hasattr(day_date, 'weekday'):
-                if day_date.weekday() < 5:  # 0-4 = Пн-Пт
-                    working_days.append(day_date)
-        
-        if not working_days:
-            return results
-        
-        # Распределяем точки по дням
-        visits_by_day = WeeklyRouteOptimizer.distribute_points_to_days(
-            auditor_points, visits_needed, working_days
-        )
-        
-        # Для каждого дня строим оптимальный маршрут
-        for day_date, day_points in visits_by_day.items():
-            if not day_points:
-                continue
-            
-            # Строим оптимальный маршрут для дня
-            optimized_route = WeeklyRouteOptimizer.greedy_route(day_points)
-            
-            # Добавляем каждую точку в результат с указанием дня
-            # Преобразуем в datetime если нужно
-            if isinstance(day_date, date):
-                day_datetime = datetime.combine(day_date, datetime.min.time())
-            else:
-                day_datetime = day_date
-            
-            day_of_week = day_datetime.weekday()  # 0=понедельник, 4=пятница
-            
-            for point in optimized_route:
-                results.append({
-                    'ID_Точки': point['ID_Точки'],
-                    'Дата': day_datetime,
-                    'День_недели': day_of_week,
-                    'Аудитор': auditor_id,
-                    'Широта': point['Широта'],
-                    'Долгота': point['Долгота']
-                })
-        
-        return results
-
-# ==============================================
-# ФУНКЦИИ ДЛЯ РАСЧЕТА РАБОЧИХ ДНЕЙ И КЛАСТЕРИЗАЦИИ
-# ==============================================
-
-def get_working_days_for_quarter(year, quarter):
-    """
-    Возвращает список рабочих дней в квартале
-    с учетом российских праздников (использует workalendar если доступен)
-    """
-    quarter_start, quarter_end = get_quarter_dates(year, quarter)
-    
-    if WORKALENDAR_AVAILABLE:
-        # Используем библиотеку workalendar для точного расчета
-        cal = Russia()
-        working_days = []
-        current_date = quarter_start
-        
-        while current_date <= quarter_end:
-            if cal.is_working_day(current_date):
-                working_days.append(current_date)
-            current_date += timedelta(days=1)
-        
-        return working_days
-    else:
-        # Простая версия: только понедельник-пятница
-        st.sidebar.warning("⚠️ Для учета праздников установите: pip install workalendar")
-        
-        working_days = []
-        current_date = quarter_start
-        
-        while current_date <= quarter_end:
-            if current_date.weekday() < 5:  # Пн-Пт
-                working_days.append(current_date)
-            current_date += timedelta(days=1)
-        
-        return working_days
-
-def simple_cluster_points(points, n_clusters):
-    """
-    Простая кластеризация без sklearn
-    """
-    if not points or n_clusters <= 0:
-        return [[] for _ in range(n_clusters)] if n_clusters > 0 else []
-    
-    if len(points) <= n_clusters:
-        # Каждая точка в своей группе
-        clusters = [[p] for p in points]
-        # Добавляем пустые группы если нужно
-        while len(clusters) < n_clusters:
-            clusters.append([])
-        return clusters
-    
-    # Выбираем начальные центры
-    centers = []
-    
-    # Первый центр - первая точка
-    if points:
-        centers.append(points[0])
-    
-    # Остальные центры - самые удаленные
-    for _ in range(1, min(n_clusters, len(points))):
-        max_min_distance = -1
-        best_point = None
-        
-        for point in points:
-            if point in centers:
-                continue
-            
-            # Минимальное расстояние до существующих центров
-            min_dist = float('inf')
-            for center in centers:
-                dist = WeeklyRouteOptimizer.calculate_distance(
-                    point['Широта'], point['Долгота'],
-                    center['Широта'], center['Долгота']
-                )
-                min_dist = min(min_dist, dist)
-            
-            if min_dist > max_min_distance:
-                max_min_distance = min_dist
-                best_point = point
-        
-        if best_point:
-            centers.append(best_point)
-        else:
-            # Если не нашли, берем любую неиспользованную
-            for point in points:
-                if point not in centers:
-                    centers.append(point)
-                    break
-    
-    # Если не набрали достаточно центров
-    while len(centers) < n_clusters:
-        centers.append(points[0])  # дублируем первую точку
-    
-    # Назначаем точки ближайшим центрам
-    clusters = [[] for _ in range(n_clusters)]
-    
-    for point in points:
-        # Находим ближайший центр
-        min_dist = float('inf')
-        nearest_idx = 0
-        
-        for i, center in enumerate(centers):
-            dist = WeeklyRouteOptimizer.calculate_distance(
-                point['Широта'], point['Долгота'],
-                center['Широта'], center['Долгота']
-            )
-            if dist < min_dist:
-                min_dist = dist
-                nearest_idx = i
-        
-        if 0 <= nearest_idx < n_clusters:
-            clusters[nearest_idx].append(point)
-    
-    return clusters
-
-def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
-
-        # ДИАГНОСТИКА
-    print(f"=== create_daily_routes_for_auditor ===")
-    print(f"Аудитор: {auditor_id}")
-    print(f"Получено точек: {len(auditor_points)}")
-    print(f"Получено рабочих дней: {len(working_days)}")
-    print(f"Дни недели: {[d.strftime('%Y-%m-%d (%a)') for d in working_days]}")
-    
-    if not auditor_points or not working_days:
-        print("❌ Пустые входные данные!")
-        return []
-    """
-    УНИВЕРСАЛЬНЫЙ АЛГОРИТМ ДЛЯ ГОРОДОВ-МИЛЛИОННИКОВ РОССИИ
-    С ПРОСТЫМ ГЕОГРАФИЧЕСКИМ РАЙОНИРОВАНИЕМ
-    """
-    try:
-        if not auditor_points or not working_days:
-            return []
-        
-        K = len(working_days)
-        if K == 0:
-            return []
-        
-        # 1. Валидация точек
-        valid_points = []
-        for point in auditor_points:
-            try:
-                lat = float(point['Широта'])
-                lon = float(point['Долгота'])
-                if 41 <= lat <= 82 and 19 <= lon <= 180:
-                    valid_points.append(point)
-            except:
-                continue
-        
-        if not valid_points:
-            return []
-        
-        # 2. Если точек мало
-        if len(valid_points) <= K:
-            return simple_distribute_points(valid_points, working_days, auditor_id)
-        
-        # 3. ПРОСТОЙ И ЭФФЕКТИВНЫЙ АЛГОРИТМ
-        def spatial_hash(point):
-            """Пространственный хеш для группировки близких точек"""
-            lat = point['Широта']
-            lon = point['Долгота']
-            # Квадратные ячейки примерно 1.1x1.1 км
-            cell_size = 0.01  # ~1.1 км
-            lat_cell = int(lat / cell_size)
-            lon_cell = int(lon / cell_size)
-            return f"{lat_cell}_{lon_cell}"
-        
-        # Группируем по пространственным ячейкам
-        cells = {}
-        for point in valid_points:
-            cell = spatial_hash(point)
-            if cell not in cells:
-                cells[cell] = []
-            cells[cell].append(point)
-        
-        # Сортируем ячейки по географическому положению
-        sorted_cells = sorted(cells.items(), 
-                            key=lambda x: (-float(x[0].split('_')[0]),  # север→юг
-                                           float(x[0].split('_')[1])))  # запад→восток
-        
-        # 4. Распределяем ячейки по дням
-        daily_groups = [[] for _ in range(K)]
-        cell_idx = 0
-        
-        for cell_key, cell_points in sorted_cells:
-            # Добавляем всю ячейку в один день
-            day_idx = cell_idx % K
-            daily_groups[day_idx].extend(cell_points)
-            cell_idx += 1
-        
-        # 5. Создаем маршруты
-        routes = []
-        
-        for day_idx, (day_date, day_points) in enumerate(zip(working_days, daily_groups)):
-            if not day_points:
-                continue
-            
-            # Обработка даты
-            visit_datetime = day_date
-            if isinstance(day_date, date) and not isinstance(day_date, datetime):
-                visit_datetime = datetime.combine(day_date, datetime.min.time())
-            
-            for order, point in enumerate(day_points, 1):
-                routes.append({
-                    'ID_Точки': point['ID_Точки'],
-                    'Дата': visit_datetime,
-                    'День_недели': visit_datetime.weekday(),
-                    'Аудитор': auditor_id,
-                    'Широта': point['Широта'],
-                    'Долгота': point['Долгота'],
-                    'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
-                    'Адрес': point.get('Адрес', ''),
-                    'Тип': point.get('Тип', 'Неизвестно'),
-                    'Порядок_в_дне': order
-                })
-        
-        return routes
-    
-    except Exception as e:
-        st.error(f"❌ Ошибка в create_daily_routes_for_auditor: {str(e)}")
-        return []
-
-
-def simple_distribute_points(points, working_days, auditor_id):
-    """Простое распределение точек по дням"""
-    routes = []
-    
-    for i, point in enumerate(points):
-        if i >= len(working_days):
-            break
-        
-        day_date = working_days[i]
-        if isinstance(day_date, date) and not isinstance(day_date, datetime):
-            visit_datetime = datetime.combine(day_date, datetime.min.time())
-        else:
-            visit_datetime = day_date
-        
-        routes.append({
-            'ID_Точки': point['ID_Точки'],
-            'Дата': visit_datetime,
-            'День_недели': visit_datetime.weekday(),
-            'Аудитор': auditor_id,
-            'Широта': point['Широта'],
-            'Долгота': point['Долгота'],
-            'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
-            'Адрес': point.get('Адрес', ''),
-            'Тип': point.get('Тип', 'Неизвестно'),
-            'Порядок_в_дне': 1  # ДОБАВЛЕНО
-        })
-    
-    return routes
-
-
-def balance_clusters_simple(clusters, target_k):
-    """Простая балансировка кластеров"""
-    # Собираем все точки
-    all_points = []
-    for cluster in clusters:
-        all_points.extend(cluster)
-    
-    if len(all_points) == 0:
-        return [[] for _ in range(target_k)]
-    
-    # Сортируем по географии
-    sorted_points = sort_points_spatially(points)
-    
-    # Распределяем равномерно
-    balanced = [[] for _ in range(target_k)]
-    for i, point in enumerate(sorted_points):
-        balanced[i % target_k].append(point)
-    
-    return balanced
-
-
-def simple_geographic_distribution(points, working_days, auditor_id):
-    """Простое географическое распределение"""
-    if not points or not working_days:
-        return []
-    
-    K = len(working_days)
-    
-# УЛУЧШЕННАЯ СОРТИРОВКА ДЛЯ КОМПАКТНЫХ ЗОН
-    def spatial_sort_key(point):
-        """
-        Сортировка создающая КВАДРАТНЫЕ зоны:
-        1. Группируем точки в "ряды" по широте (~1.1 км)
-        2. Внутри ряда сортируем по долготе
-        """
-        lat = point['Широта']
-        lon = point['Долгота']
-        
-        # Группируем в полосы по 0.01° (~1.1 км в РФ)
-        # Это создаст горизонтальные полосы на карте
-        lat_row = int(lat / 0.01)
-        
-        # Сортируем: сначала по рядам (север→юг), 
-        # потом внутри ряда (запад→восток)
-        return (-lat_row, lon)
-    
-    # Используем улучшенную сортировку
-    sorted_points = sorted(points, key=spatial_sort_key)
-    
-    # Делим на части
-    daily_clusters = []
-    base_size = len(sorted_points) // K
-    remainder = len(sorted_points) % K
-    
-    start_idx = 0
-    for day_idx in range(K):
-        size = base_size + (1 if day_idx < remainder else 0)
-        end_idx = start_idx + size
-        
-        if start_idx < len(sorted_points):
-            daily_clusters.append(sorted_points[start_idx:end_idx])
-            start_idx = end_idx
-        else:
-            daily_clusters.append([])
-    
-    # Строим маршруты
-    routes = []
-    for day_idx, (day_date, cluster_points) in enumerate(zip(working_days, daily_clusters)):
-        if not cluster_points:
-            continue
-        
-        if isinstance(day_date, date) and not isinstance(day_date, datetime):
-            visit_datetime = datetime.combine(day_date, datetime.min.time())
-        else:
-            visit_datetime = day_date
-        
-        for point in cluster_points:
-            routes.append({
-                'ID_Точки': point['ID_Точки'],
-                'Дата': visit_datetime,
-                'День_недели': visit_datetime.weekday(),
-                'Аудитор': auditor_id,
-                'Широта': point['Широта'],
-                'Долгота': point['Долгота'],
-                'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
-                'Адрес': point.get('Адрес', ''),
-                'Тип': point.get('Тип', 'Неизвестно')
-            })
-    
-    return routes
-    
-# ==============================================
-# ФУНКЦИИ ДЛЯ СОЗДАНИЯ ВЫХОДНОЙ ТАБЛИЦЫ
-# ==============================================
-
-# ==============================================
-# ИСПРАВЛЕННЫЙ МОДУЛЬ: РАЗБИЕНИЕ ПОЛИГОНА ПО НЕДЕЛЯМ (БЕЗ STREAMLIT)
-# ==============================================
-
-# Добавьте эти импорты в НАЧАЛО модуля:
-import numpy as np
-from typing import Dict, List, Tuple, Optional, Callable
-import warnings
-
-
-def detect_outliers_simple(points: np.ndarray, centroid: np.ndarray, 
-                          threshold_multiplier: float = 2.0) -> Tuple[List[int], List[int]]:
-    """Простой метод определения выбросов по расстоянию до центроида"""
-    if len(points) == 0:
-        return [], []
-    
-    try:
-        # Вычисляем расстояния до центроида
-        distances = np.sqrt(np.sum((points - centroid) ** 2, axis=1))
-        
-        # Среднее расстояние + порог
-        mean_dist = np.mean(distances)
-        std_dist = np.std(distances) if len(distances) > 1 else 0
-        
-        if std_dist == 0:
-            # Все точки на одинаковом расстоянии
-            return list(range(len(points))), []
-        
-        threshold = mean_dist + threshold_multiplier * std_dist
-        
-        normal_indices = np.where(distances <= threshold)[0].tolist()
-        outlier_indices = np.where(distances > threshold)[0].tolist()
-        
-        return normal_indices, outlier_indices
-    except:
-        # Если что-то пошло не так, считаем все точки нормальными
-        return list(range(len(points))), []
-
-
-def calculate_weekly_targets_simple(total_points: int, num_weeks: int, 
-                                   coefficients: List[float]) -> List[int]:
-    """Упрощенный расчет целевого количества точек"""
-    if total_points <= 0 or num_weeks <= 0:
-        return []
-    
-    if len(coefficients) < 4:
-        coefficients = [1.0] * 4
-    
-    # Простая логика распределения
-    if num_weeks <= 4:
-        # Используем коэффициенты напрямую
-        normalized = [c / sum(coefficients[:num_weeks]) for c in coefficients[:num_weeks]]
-    else:
-        # Распределяем коэффициенты циклически
-        weekly_coeffs = []
-        for i in range(num_weeks):
-            weekly_coeffs.append(coefficients[i % 4])
-        total_coeff = sum(weekly_coeffs)
-        normalized = [c / total_coeff for c in weekly_coeffs]
-    
-    # Рассчитываем цели
-    targets = []
-    remaining = total_points
-    
-    for i in range(num_weeks):
-        if i == num_weeks - 1:
-            target = remaining  # Последняя неделя получает остаток
-        else:
-            target = max(1, int(round(total_points * normalized[i])))
-            remaining -= target
-        
-        targets.append(target)
-    
-    # Корректируем если нужно
-    total_assigned = sum(targets)
-    if total_assigned != total_points:
-        diff = total_points - total_assigned
-        if diff != 0 and targets:
-            targets[-1] += diff
-    
-    return targets
-
-
-def initialize_clusters_simple(polygon: np.ndarray, num_clusters: int, 
-                              points: np.ndarray) -> np.ndarray:
-    """Простая инициализация центров кластеров"""
-    if len(points) == 0:
-        return np.array([])
-    
-    if len(points) <= num_clusters:
-        return points.copy()
-    
-    try:
-        # Пробуем использовать вершины полигона если возможно
-        if len(polygon) >= num_clusters:
-            # Выбираем равномерно распределенные точки полигона
-            indices = np.linspace(0, len(polygon) - 1, num_clusters, dtype=int)
-            return polygon[indices]
-        else:
-            # Случайные точки из данных
-            np.random.seed(42)  # Для воспроизводимости
-            indices = np.random.choice(len(points), num_clusters, replace=False)
-            return points[indices]
-    except:
-        # Fallback: первые num_clusters точек
-        return points[:num_clusters]
-
-
-def simple_balanced_kmeans(points: np.ndarray, point_ids: List[str], 
-                          num_clusters: int, initial_centers: np.ndarray,
-                          weekly_targets: List[int], logger: Callable) -> Tuple[Dict, Dict]:
-    """Упрощенный балансированный k-means"""
-    n_points = len(points)
-    
-    if n_points == 0 or num_clusters <= 0:
-        return {}, {}
-    
-    # Инициализация центров
-    centers = initial_centers.copy()
-    if len(centers) < num_clusters:
-        # Дополняем если нужно
-        needed = num_clusters - len(centers)
-        if n_points >= needed:
-            indices = np.random.choice(n_points, needed, replace=False)
-            centers = np.vstack([centers, points[indices]])
-    
-    # Простой k-means
-    for iteration in range(30):  # Максимум 30 итераций
-        # Шаг 1: Назначение точек по ближайшему центру
-        assignments = np.zeros(n_points, dtype=int)
-        for i, point in enumerate(points):
-            distances = np.sqrt(np.sum((centers - point) ** 2, axis=1))
-            assignments[i] = np.argmin(distances)
-        
-        # Шаг 2: Балансировка
-        assignments = simple_balance_assignments(assignments, weekly_targets, points, centers)
-        
-        # Шаг 3: Обновление центров
-        new_centers = centers.copy()
-        for i in range(num_clusters):
-            cluster_points = points[assignments == i]
-            if len(cluster_points) > 0:
-                new_centers[i] = np.mean(cluster_points, axis=0)
-            else:
-                # Если кластер пуст, перемещаем центр к случайной точке
-                idx = np.random.randint(0, n_points)
-                new_centers[i] = points[idx]
-        
-        # Шаг 4: Проверка сходимости
-        if np.max(np.sqrt(np.sum((centers - new_centers) ** 2, axis=1))) < 0.001:
-            break
-        
-        centers = new_centers
-    
-    # Формируем результат
-    week_assignments = {}
-    week_clusters = {}
-    
-    for week in range(num_clusters):
-        week_mask = assignments == week
-        week_point_ids = [point_ids[i] for i in range(n_points) if week_mask[i]]
-        
-        if week_point_ids:
-            week_points = points[week_mask]
-            week_assignments[week] = week_point_ids
-            
-            # Вычисляем центроид
-            centroid = np.mean(week_points, axis=0) if len(week_points) > 0 else centers[week]
-            
-            # Вычисляем компактность (среднее расстояние до центроида)
-            if len(week_points) > 0:
-                distances = np.sqrt(np.sum((week_points - centroid) ** 2, axis=1))
-                compactness = np.mean(distances)
-            else:
-                compactness = 0
-            
-            week_clusters[week] = {
-                'centroid': centroid.tolist(),
-                'size': len(week_points),
-                'compactness': float(compactness)
-            }
-    
-    return week_assignments, week_clusters
-
-
-def simple_balance_assignments(assignments: np.ndarray, targets: List[int],
-                              points: np.ndarray, centers: np.ndarray) -> np.ndarray:
-    """Простая балансировка назначений"""
-    n_clusters = len(targets)
-    current_counts = np.bincount(assignments, minlength=n_clusters)
-    
-    # Создаем копию для модификации
-    balanced = assignments.copy()
-    
-    # Для каждого кластера проверяем баланс
-    for cluster in range(n_clusters):
-        current = current_counts[cluster]
-        target = targets[cluster]
-        
-        if current > target + 3:  # Слишком много точек
-            excess = current - (target + 3)
-            cluster_indices = np.where(balanced == cluster)[0]
-            
-            # Находим самые дальние точки от центра
-            if len(cluster_indices) > 0:
-                distances = np.sqrt(np.sum((points[cluster_indices] - centers[cluster]) ** 2, axis=1))
-                # Сортируем по убыванию расстояния
-                far_indices = cluster_indices[np.argsort(distances)[::-1]]
-                
-                # Перемещаем excess самых дальних точек
-                moved = 0
-                for idx in far_indices:
-                    if moved >= excess:
-                        break
-                    
-                    # Находим ближайший другой кластер с дефицитом
-                    point = points[idx]
-                    best_new_cluster = -1
-                    best_dist = float('inf')
-                    
-                    for other_cluster in range(n_clusters):
-                        if other_cluster == cluster:
-                            continue
-                        if current_counts[other_cluster] < targets[other_cluster]:
-                            dist = np.sqrt(np.sum((point - centers[other_cluster]) ** 2))
-                            if dist < best_dist:
-                                best_dist = dist
-                                best_new_cluster = other_cluster
-                    
-                    if best_new_cluster != -1:
-                        balanced[idx] = best_new_cluster
-                        current_counts[cluster] -= 1
-                        current_counts[best_new_cluster] += 1
-                        moved += 1
-    
-    return balanced
-
-
-def attach_outliers_simple(outlier_points: np.ndarray, outlier_ids: List[str],
-                          week_clusters: Dict, week_assignments: Dict) -> Dict:
-    """Прикрепление выбросов к ближайшим кластерам"""
-    if len(outlier_points) == 0:
-        return week_assignments
-    
-    for i, point in enumerate(outlier_points):
-        point_id = outlier_ids[i]
-        min_dist = float('inf')
-        best_week = -1
-        
-        # Находим ближайший кластер
-        for week, cluster_info in week_clusters.items():
-            centroid = np.array(cluster_info['centroid'])
-            dist = np.sqrt(np.sum((point - centroid) ** 2))
-            if dist < min_dist:
-                min_dist = dist
-                best_week = week
-        
-        # Добавляем точку к ближайшему кластеру
-        if best_week != -1:
-            if best_week not in week_assignments:
-                week_assignments[best_week] = []
-            week_assignments[best_week].append(point_id)
-    
-    return week_assignments
-
-
-def fallback_geographic_split(points_coords: List[List[float]], 
-                             point_ids: List[str], 
-                             num_weeks: int, 
-                             coefficients: List[float]) -> Tuple[Dict, Dict]:
-    """Фолбэк: простое географическое разбиение"""
-    if not points_coords or not point_ids or num_weeks <= 0:
-        return {}, {}
-    
-    try:
-        points_np = np.array(points_coords, dtype=float)
-    except:
-        return {}, {}
-    
-    # Сортируем по широте (север-юг), затем по долготе (запад-восток)
-    if len(points_np) > 0:
-        # Используем устойчивую сортировку
-        sorted_indices = np.lexsort((points_np[:, 1], points_np[:, 0]))  # lat, lon
-    else:
-        return {}, {}
-    
-    week_assignments = {}
-    week_clusters = {}
-    
-    points_per_week = len(points_coords) // num_weeks
-    remainder = len(points_coords) % num_weeks
-    
-    start_idx = 0
-    for week in range(num_weeks):
-        week_size = points_per_week + (1 if week < remainder else 0)
-        end_idx = min(start_idx + week_size, len(points_coords))
-        
-        if start_idx < len(points_coords):
-            week_indices = sorted_indices[start_idx:end_idx]
-            week_point_ids = [point_ids[idx] for idx in week_indices]
-            
-            week_assignments[week] = week_point_ids
-            
-            # Вычисляем центроид
-            if len(week_indices) > 0:
-                week_points = points_np[week_indices]
-                centroid = np.mean(week_points, axis=0)
-                week_clusters[week] = {
-                    'centroid': centroid.tolist(),
-                    'size': len(week_points),
-                    'compactness': 0.0
-                }
-            
-            start_idx = end_idx
-    
-    return week_assignments, week_clusters
-                                 
-# ==============================================
-# ФУНКЦИЯ ДЛЯ РАЗБИЕНИЯ ПОЛИГОНА ПО НЕДЕЛЯМ
-# ==============================================
-
-def split_polygon_by_weeks(polygon_coords, points_coords, point_ids, num_weeks, 
-                          coefficients, polygon_name="", auditor_id="", logger=None):
-    """
-    Разбивает полигон аудитора на N компактных областей по неделям
-    Возвращает: (week_assignment, week_clusters)
-    """
-    
-    import numpy as np
-    
-    # Проверка входных данных
-    if not points_coords or not point_ids or num_weeks <= 0:
-        if logger:
-            logger("❌ Недостаточно данных для разбиения")
-        return {}, {}
-    
-    if len(points_coords) != len(point_ids):
-        if logger:
-            logger(f"❌ Несоответствие координат ({len(points_coords)}) и ID ({len(point_ids)})")
-        return {}, {}
-    
-    # Создаем logger если не предоставлен
-    if logger is None:
-        def default_logger(msg):
-            print(f"[{auditor_id or 'UNKNOWN'}] {msg}")
-        logger = default_logger
-    
-    try:
-        logger(f"Начинаю разбиение: {len(point_ids)} точек на {num_weeks} недель")
-        
-        week_assignment = {}
-        week_clusters = {}
-        
-        # 1. Если точек меньше чем недель
-        if len(point_ids) < num_weeks:
-            logger(f"⚠️ Точек ({len(point_ids)}) меньше чем недель ({num_weeks})")
-            # Каждой точке своя неделя
-            for i, point_id in enumerate(point_ids):
-                if i < num_weeks:
-                    week_assignment[i] = [point_id]
-                    if i < len(points_coords):
-                        week_clusters[i] = {
-                            'centroid': points_coords[i],
-                            'size': 1
-                        }
-            return week_assignment, week_clusters
-        
-        # 2. Распределяем точки по неделям
-        total_points = len(point_ids)
-        points_per_week = total_points // num_weeks
-        remainder = total_points % num_weeks
-        
-        logger(f"Точек в неделю: {points_per_week}, остаток: {remainder}")
-        
-        start_idx = 0
-        for week in range(num_weeks):
-            # Определяем размер недели
-            week_size = points_per_week + (1 if week < remainder else 0)
-            end_idx = start_idx + week_size
-            
-            if start_idx >= total_points:
-                break
-                
-            # Берем точки для этой недели
-            week_point_ids = point_ids[start_idx:end_idx]
-            week_assignment[week] = week_point_ids
-            
-            # Вычисляем центроид
-            week_points_coords = []
-            for i in range(start_idx, min(end_idx, len(points_coords))):
-                week_points_coords.append(points_coords[i])
-            
-            if week_points_coords:
-                try:
-                    points_array = np.array(week_points_coords, dtype=float)
-                    centroid = points_array.mean(axis=0).tolist()
-                    week_clusters[week] = {
-                        'centroid': centroid,
-                        'size': len(week_points_coords),
-                        'points_count': len(week_point_ids)
-                    }
-                except Exception as e:
-                    logger(f"⚠️ Ошибка вычисления центроида недели {week}: {str(e)}")
-                    # Используем первую точку как центроид
-                    week_clusters[week] = {
-                        'centroid': week_points_coords[0] if week_points_coords else [0, 0],
-                        'size': len(week_points_coords),
-                        'points_count': len(week_point_ids)
-                    }
-            
-            start_idx = end_idx
-        
-        # 3. Проверяем результат
-        total_assigned = sum(len(ids) for ids in week_assignment.values())
-        logger(f"✅ Разбиение завершено: {total_assigned} точек распределено по {len(week_assignment)} неделям")
-        
-        # Логи по неделям
-        for week in sorted(week_assignment.keys()):
-            week_size = len(week_assignment[week])
-            logger(f"  Неделя {week}: {week_size} точек")
-        
-        return week_assignment, week_clusters
-        
-    except Exception as e:
-        logger(f"🔥 КРИТИЧЕСКАЯ ОШИБКА в split_polygon_by_weeks: {str(e)}")
-        import traceback
-        logger(f"Детали: {traceback.format_exc()[:200]}")
-        return {}, {}
-
-# ==============================================
-# ОБНОВЛЕННАЯ ФУНКЦИЯ create_weekly_route_schedule
-# ==============================================
-
-def create_weekly_route_schedule(points_df, points_assignment_df, auditors_df, 
-                                 year, quarter, use_enhanced_split=True):
-
-    # ========== ДИАГНОСТИКА ==========
-    st.info("=== ДИАГНОСТИКА НАЧАТА ===")
-    st.info(f"use_enhanced_split = {use_enhanced_split}")
-    st.info(f"points_df: {'НЕТ' if points_df is None else f'{len(points_df)} строк'}")
-    st.info(f"auditors_df: {'НЕТ' if auditors_df is None else f'{len(auditors_df)} строк'}")
-    st.info(f"Есть ли polygons в session_state: {'polygons' in st.session_state}")
-    
-    if 'polygons' in st.session_state:
-        polygons = st.session_state.polygons
-        st.info(f"Количество полигонов: {len(polygons)}")
-        for i, (name, poly) in enumerate(list(polygons.items())[:3]):
-            st.info(f"  Полигон {i+1}: {name}, аудитор: {poly.get('auditor', '?')}")
-
-                                     
-    """
-    Создает ежедневные маршруты для аудиторов в формате EasyMerch
-    """
-    
-    if points_df is None or points_df.empty:
-        return pd.DataFrame()
-    
-    if points_assignment_df is None or points_assignment_df.empty:
-        return pd.DataFrame()
-    
-    # Получаем недели (общее для всех вариантов)
-    try:
-        weeks_info = get_weeks_in_quarter(year, quarter)
-        if not weeks_info:
-            st.warning(f"⚠️ В {year} квартале {quarter} нет недель")
-            return pd.DataFrame()
-        num_weeks = len(weeks_info)
-        weeks_dict = {i: weeks_info[i] for i in range(num_weeks)}
-    except Exception as e:
-        st.error(f"❌ Ошибка получения недель: {str(e)}")
-        return pd.DataFrame()
-    
-    all_visits = []
-    
-    # ============================================
-    # НОВАЯ ЛОГИКА: разбиение полигона по неделям
-    # ============================================
-    if use_enhanced_split:
-        # Коэффициенты из настроек
-        coefficients = [
-            st.session_state.get('sidebar_stage1', 0.8),
-            st.session_state.get('sidebar_stage2', 1.0),
-            st.session_state.get('sidebar_stage3', 1.2),
-            st.session_state.get('sidebar_stage4', 0.9)
-        ]
-        
-        # Для каждого аудитора
-        for auditor in auditors_df['ID_Сотрудника'].unique():
-            try:
-                # Находим точки этого аудитора
-                auditor_point_ids = points_assignment_df[
-                    points_assignment_df['Аудитор'] == auditor
-                ]['ID_Точки'].tolist()
-                
-                if not auditor_point_ids:
-                    continue
-                
-                auditor_points_data = points_df[
-                    points_df['ID_Точки'].isin(auditor_point_ids)
-                ]
-                
-                if auditor_points_data.empty:
-                    continue
-                
-                # Находим полигон аудитора
-                polygon_info = None
-                polygon_name = None
-                polygons = st.session_state.get('polygons', {})
-                for poly_name, poly_info in polygons.items():
-                    if poly_info.get('auditor') == auditor:
-                        polygon_info = poly_info
-                        polygon_name = poly_name
-                        break
-                
-                if not polygon_info or not polygon_info.get('coordinates'):
-                    # Если нет полигона, используем все точки
-                    week_points_list = []
-                    for _, row in auditor_points_data.iterrows():
-                        visits_needed = int(row.get('Кол-во_посещений', 1))
-                        for _ in range(visits_needed):
-                            week_points_list.append({
-                                'ID_Точки': row['ID_Точки'],
-                                'Широта': float(row['Широta']),
-                                'Долгота': float(row['Долгота']),
-                                'Название_Точки': row.get('Название_Точки', str(row['ID_Точки'])),
-                                'Адрес': row.get('Адрес', ''),
-                                'Тип': row.get('Тип', 'Неизвестно')
-                            })
-                    
-                    
-                        # Распределяем по неделям простым способом
-                        for week_idx in range(num_weeks):
-                            week_info = weeks_dict.get(week_idx)
-                            if not week_info:
-                                continue
-                            
-                            week_start = week_info['start_date']
-                            week_end = week_info['end_date']
-                            
-                            # Только рабочие дни (Пн-Пт)
-                            working_days_this_week = []
-                            current_date = week_start
-                            while current_date <= week_end:
-                                if current_date.weekday() < 5:  # 0=Пн, 4=Пт
-                                    working_days_this_week.append(current_date)
-                                current_date += timedelta(days=1)
-                            
-                            if working_days_this_week:
-                                st.info(f"📅 Неделя {week_idx}: {len(working_days_this_week)} рабочих дней")
-                                
-                                weekly_visits = create_daily_routes_for_auditor(
-                                    week_points_list, working_days_this_week, auditor
-                                )
-                                
-                                if weekly_visits:
-                                    all_visits.extend(weekly_visits)
-                                    st.success(f"✅ Создано {len(weekly_visits)} визитов")
-                                else:
-                                    st.warning(f"⚠️ Не создано ни одного визита для недели {week_idx}")
-                        continue
-                
-                # Подготавливаем данные для разбиения
-                polygon_coords = polygon_info['coordinates']
-                points_coords = []
-                point_ids_list = []
-                
-                for _, row in auditor_points_data.iterrows():
-                    point_id = str(row['ID_Точки'])
-                    try:
-                        lat = float(row['Широта'])
-                        lon = float(row['Долгота'])
-                        visits_needed = int(row.get('Кол-во_посещений', 1))
-                        for _ in range(visits_needed):
-                            points_coords.append([lat, lon])
-                            point_ids_list.append(point_id)
-                    except (ValueError, TypeError):
-                        continue
-                
-                if len(points_coords) == 0:
-                    continue
-                
-                # Создаем логгер для этого аудитора
-                current_auditor = auditor  # Фиксируем переменную
-                log_messages = []
-                
-                def auditor_logger(msg):
-                    log_messages.append(f"{current_auditor}: {msg}")
-                
-                # Разбиваем полигон по неделям
-                week_assignment, week_clusters = split_polygon_by_weeks(
-                    polygon_coords=polygon_coords,
-                    points_coords=points_coords,
-                    point_ids=point_ids_list,
-                    num_weeks=num_weeks,
-                    coefficients=coefficients,
-                    polygon_name=polygon_name,
-                    auditor_id=auditor,
-                    logger=auditor_logger
-                )
-                
-                # Показываем логи
-                for msg in log_messages[-3:]:
-                    st.info(msg)
-                
-                if not week_assignment:
-                    st.warning(f"⚠️ {auditor}: не удалось разбить полигон")
-                    continue
-                               # Создаем маршруты для каждой недели
-                for week_key, week_point_ids in week_assignment.items():
-                    if not week_point_ids:
-                        continue
-                    
-                    # Преобразуем week_key в индекс (0-based)
-                    try:
-                        week_idx = int(week_key)
-                        if week_idx >= num_weeks:
-                            continue
-                    except (ValueError, TypeError):
-                        continue
-                    
-                    # Фильтруем точки этой недели
-                    week_points_data = auditor_points_data[
-                        auditor_points_data['ID_Точки'].isin(week_point_ids)
-                    ]
-                    
-                    if week_points_data.empty:
-                        continue
-                    
-                    # Преобразуем в список словарей
-                    week_points_list = []
-                    for _, row in week_points_data.iterrows():
-                        visits_needed = int(row.get('Кол-во_посещений', 1))
-                        for _ in range(visits_needed):
-                            week_points_list.append({
-                                'ID_Точки': row['ID_Точки'],
-                                'Широта': float(row['Широта']),
-                                'Долгота': float(row['Долгота']),
-                                'Название_Точки': row.get('Название_Точки', str(row['ID_Точки'])),
-                                'Адрес': row.get('Адрес', ''),
-                                'Тип': row.get('Тип', 'Неизвестно')
-                            })
-                    
-                    # Находим даты этой недели
-                    week_info = weeks_dict.get(week_idx)
-                    if not week_info:
-                        continue
-                    
-                    week_start = week_info['start_date']
-                    week_end = week_info['end_date']
-                    
-                    # Только рабочие дни (Пн-Пт)
-                    working_days_this_week = []
-                    current_date = week_start
-                    while current_date <= week_end:
-                        if current_date.weekday() < 5:  # 0=Пн, 4=Пт
-                            working_days_this_week.append(current_date)
-                        current_date += timedelta(days=1)
-                    
-                    if working_days_this_week:
-                        st.info(f"📅 Неделя {week_idx}: {len(working_days_this_week)} рабочих дней")
-                        
-                        weekly_visits = create_daily_routes_for_auditor(
-                            week_points_list, working_days_this_week, auditor
-                        )
-                        
-                        if weekly_visits:
-                            all_visits.extend(weekly_visits)
-                            st.success(f"✅ Создано {len(weekly_visits)} визитов")
-                        else:
-                            st.warning(f"⚠️ Не создано ни одного визита для недели {week_idx}")
-                    
-            except Exception as e:
-                st.error(f"❌ {auditor}: ошибка: {str(e)[:100]}")
-            continue
-    
-    
-    
-    # ============================================
-    # ОБЩАЯ ЧАСТЬ: формирование финальной таблицы
-    # ============================================
-    if not all_visits:
-        return pd.DataFrame()
-    
-    # Преобразуем в DataFrame
-    results_df = pd.DataFrame(all_visits)
-    
-    # Группируем по неделям для формата EasyMerch
-    results_df['Неделя'] = results_df['Дата'].apply(lambda d: d.isocalendar()[1])
-    results_df['Дата_начала_недели'] = results_df['Дата'].apply(
-        lambda d: d - timedelta(days=d.weekday())
-    )
-    
-    # Создаем финальную таблицу в формате EasyMerch
-    final_rows = []
-    
-    # Группируем по точкам и неделям
-    grouped = results_df.groupby(['ID_Точки', 'Неделя', 'Аудитор'])
-    
-    for (point_id, week_num, auditor), group in grouped:
-        point_mask = points_df['ID_Точки'] == point_id
-        if not point_mask.any():
-            continue
-            
-        point_info = points_df[point_mask].iloc[0]
-        
-        visits_this_week = len(group)
-        days_visited = set(group['День_недели'].tolist())
-        week_start_date = group['Дата_начала_недели'].iloc[0]
-        
-        # Преобразуем в строку YYYYMMDD
-        if isinstance(week_start_date, (datetime, pd.Timestamp)):
-            start_date_str = week_start_date.strftime('%Y%m%d')
-        else:
-            start_date_str = str(week_start_date).replace('-', '')
-        
-        # Получаем координаты
-        try:
-            latitude = float(point_info.get('Широта', 0))
-            longitude = float(point_info.get('Долгота', 0))
-        except (ValueError, TypeError):
-            latitude = 0
-            longitude = 0
-        
-        # Создаем строку
-        row = {
-            'ID_Точки': point_id,
-            'Address': point_info.get('Адрес', ''),
-            'L1 Name': point_info.get('Название_Точки', str(point_id)),
-            'ЧИСЛО визитов в НЕДЕЛЮ': visits_this_week,
-            'Login пользователя': auditor,
-            'Понедельник': 1 if 0 in days_visited else '',
-            'Вторник': 1 if 1 in days_visited else '',
-            'Среда': 1 if 2 in days_visited else '',
-            'Четверг': 1 if 3 in days_visited else '',
-            'Пятница': 1 if 4 in days_visited else '',
-            'Суббота': 1 if 5 in days_visited else '',
-            'Воскресенье': 1 if 6 in days_visited else '',
-            'Цикл посещения': week_num,
-            'Дата начала цикла посещения': start_date_str,
-            'Широта': f"{latitude:.6f}",
-            'Долгота': f"{longitude:.6f}"
-        }
-        
-        final_rows.append(row)
-    
-    if not final_rows:
-        return pd.DataFrame()
-    
-    final_df = pd.DataFrame(final_rows)
-    final_df = final_df.sort_values(['Login пользователя', 'Дата начала цикла посещения', 'L1 Name'])
-    
-    return final_df
-
-def create_easymerch_excel(routes_df, points_df):
-    """Создает Excel файл в формате EasyMerch с несколькими листами"""
-    import io
-    
-    if routes_df is None or routes_df.empty:
-        return None
-    
-    excel_buffer = io.BytesIO()
-    
-    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        # Лист 1: Основные данные в формате EasyMerch
-        # Создаем копию для модификации
-        easymerch_df = routes_df.copy()
-        
-        # 1. Добавляем Customer number как первый столбец
-        # Используем ID_Точки если есть, иначе L1 Name
-        customer_number_col = None
-        if 'ID_Точки' in easymerch_df.columns:
-            customer_number_col = 'ID_Точки'
-        elif 'L1 Name' in easymerch_df.columns:
-            customer_number_col = 'L1 Name'
-        
-        if customer_number_col:
-            easymerch_df.insert(0, 'Customer number', easymerch_df[customer_number_col])
-        else:
-            easymerch_df.insert(0, 'Customer number', '')
-        
-        # 2. Заполняем столбец Город
-        easymerch_df['Город'] = ''
-        
-        if points_df is not None and not points_df.empty:
-            # Создаем словарь для сопоставления Customer number -> Город
-            city_mapping = {}
-            
-            # Вариант 1: по ID_Точки
-            if 'ID_Точки' in points_df.columns and 'Город' in points_df.columns:
-                for idx, row in points_df.iterrows():
-                    point_id = str(row['ID_Точки']).strip()
-                    city = str(row['Город']).strip()
-                    if point_id and city:
-                        city_mapping[point_id] = city
-            
-            # Вариант 2: по названию точки (если нет ID_Точки в routes_df)
-            if 'Название_Точки' in points_df.columns and 'Город' in points_df.columns:
-                for idx, row in points_df.iterrows():
-                    point_name = str(row['Название_Точки']).strip()
-                    city = str(row['Город']).strip()
-                    if point_name and city:
-                        city_mapping[point_name] = city
-            
-            # Заполняем города
-            if city_mapping:
-                # Пробуем сопоставить по Customer number
-                easymerch_df['Город'] = easymerch_df['Customer number'].map(city_mapping).fillna('')
-        
-        # 3. Добавляем столбец Вне графика после Воскресенье
-        if 'Воскресенье' in easymerch_df.columns:
-            # Находим индекс столбца Воскресенье
-            col_list = list(easymerch_df.columns)
-            if 'Воскресенье' in col_list:
-                sunday_idx = col_list.index('Воскресенье')
-                # Вставляем новый столбец после Воскресенье
-                easymerch_df.insert(sunday_idx + 1, 'Вне графика', '')
-        
-        # Сохраняем в Excel
-        easymerch_df.to_excel(writer, sheet_name='Маршруты', index=False)
-        
-        # Автонастройка ширины колонок для основного листа
-        worksheet = writer.sheets['Маршруты']
-        for column in worksheet.columns:
-            max_length = 0
-            column_letter = column[0].column_letter
-            for cell in column:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
-            adjusted_width = min(max_length + 2, 50)
-            worksheet.column_dimensions[column_letter].width = adjusted_width
-        
-        # Лист 2: Инструкция по использованию
-        instructions_data = [
-            ["ПОЛЕ", "ОПИСАНИЕ", "ПРИМЕР", "ОБЯЗАТЕЛЬНОСТЬ"],
-            ["Customer number", "ID торговой точки", "P001", "Да"],
-            ["Address", "Полный адрес точки", "ул. Ленина, д. 1, Москва", "Да"],
-            ["L1 Name", "Название торговой точки", 'Магазин "Продукты"', "Да"],
-            ["ЧИСЛО визитов в НЕДЕЛЮ", "Количество визитов в неделю (цифра)", "1, 2, 3", "Да"],
-            ["Login пользователя", "Уникальный ID аудитора", "SOVIAUD10", "Да"],
-            ["Понедельник", "Визит в понедельник (1-да, пусто-нет)", "1", "Нет"],
-            ["Вторник", "Визит во вторник (1-да, пусто-нет)", "", "Нет"],
-            ["Среда", "Визит в среду (1-да, пусто-нет)", "1", "Нет"],
-            ["Четверг", "Визит в четверг (1-да, пусто-нет)", "", "Нет"],
-            ["Пятница", "Визит в пятницу (1-да, пусто-нет)", "1", "Нет"],
-            ["Суббота", "Визит в субботу (1-да, пусто-нет)", "", "Нет"],
-            ["Воскресенье", "Визит в воскресенье (1-да, пусто-нет)", "", "Нет"],
-            ["Вне графика", "Визиты вне регулярного графика", "", "Нет"],
-            ["Цикл посещения", "Номер недели (ISO стандарт)", "15", "Да"],
-            ["Дата начала цикла посещения", "Дата понедельника в формате ГГГГММДД", "20250407", "Да"],
-            ["Широта", "Координата широты", "55.755831", "Нет"],
-            ["Долгота", "Координата долготы", "37.617673", "Нет"],
-            ["Город", "Город расположения точки", "Москва", "Да"],
-            ["", "", "", ""],
-            ["ИНСТРУКЦИЯ ПО ИСПОЛЬЗОВАНИЮ:", "", "", ""],
-            ["1. Файл готов для загрузки в EasyMerch", "", "", ""],
-            ["2. Формат даты: YYYYMMDD (например: 20250407)", "", "", ""],
-            ["3. Пустые ячейки в днях недели = нет визита", "", "", ""],
-            ["4. Ячейки с цифрой 1 = визит запланирован", "", "", ""],
-            ["5. Не изменяйте названия колонок", "", "", ""]
-        ]
-        
-        instructions_df = pd.DataFrame(instructions_data[1:], columns=instructions_data[0])
-        instructions_df.to_excel(writer, sheet_name='Инструкция', index=False)
-        
-        # Автонастройка ширины для инструкции
-        worksheet = writer.sheets['Инструкция']
-        worksheet.column_dimensions['A'].width = 25
-        worksheet.column_dimensions['B'].width = 40
-        worksheet.column_dimensions['C'].width = 25
-        worksheet.column_dimensions['D'].width = 15
-        
-        # Лист 3: Сводка и статистика
-        summary_data = {
-            'Статистика': [
-                'Всего записей в плане',
-                'Уникальных аудиторов',
-                'Уникальных торговых точек',
-                'Общее количество визитов в неделю',
-                'Количество недель в плане',
-                'Первая неделя',
-                'Последняя неделя',
-                'Среднее визитов на аудитора',
-                'Количество городов',
-                'Дата создания отчета'
-            ],
-            'Значение': [
-                len(routes_df),
-                routes_df['Login пользователя'].nunique(),
-                routes_df['L1 Name'].nunique(),
-                routes_df['ЧИСЛО визитов в НЕДЕЛЮ'].sum(),
-                routes_df['Цикл посещения'].nunique(),
-                routes_df['Цикл посещения'].min() if not routes_df.empty else '-',
-                routes_df['Цикл посещения'].max() if not routes_df.empty else '-',
-                round(routes_df['ЧИСЛО визитов в НЕДЕЛЮ'].sum() / routes_df['Login пользователя'].nunique(), 1) 
-                if routes_df['Login пользователя'].nunique() > 0 else 0,
-                easymerch_df['Город'].nunique() if 'Город' in easymerch_df.columns else 0,
-                datetime.now().strftime('%d.%m.%Y %H:%M')
-            ]
-        }
-        
-        summary_df = pd.DataFrame(summary_data)
-        summary_df.to_excel(writer, sheet_name='Сводка', index=False)
-        
-        # Автонастройка ширины для сводки
-        worksheet = writer.sheets['Сводка']
-        worksheet.column_dimensions['A'].width = 35
-        worksheet.column_dimensions['B'].width = 20
-        
-        # Лист 4: Распределение по аудиторам (дополнительно)
-        if 'Login пользователя' in routes_df.columns:
-            auditor_stats = routes_df.groupby('Login пользователя').agg({
-                'L1 Name': 'nunique',
-                'ЧИСЛО визитов в НЕДЕЛЮ': 'sum',
-                'Цикл посещения': 'nunique'
-            }).reset_index()
-            
-            auditor_stats.columns = ['Аудитор', 'Уникальных точек', 'Всего визитов', 'Недель в работе']
-            auditor_stats = auditor_stats.sort_values('Всего визитов', ascending=False)
-            auditor_stats.to_excel(writer, sheet_name='Аудиторы', index=False)
-            
-            # Автонастройка ширины
-            worksheet = writer.sheets['Аудиторы']
-            for i, column in enumerate(['A', 'B', 'C', 'D'], 1):
-                worksheet.column_dimensions[column].width = 20
-    
-    return excel_buffer.getvalue()
-                                     
-# ==============================================
 # ФУНКЦИИ ДЛЯ ГЕНЕРАЦИИ ПОЛИГОНОВ И РАСПРЕДЕЛЕНИЯ
 # ==============================================
 
@@ -2071,149 +620,13 @@ def distribute_visits_by_weeks(points_assignment_df, points_df, year, quarter, c
         st.error(f"❌ Ошибка при распределении посещений по неделям: {str(e)}")
         st.error(f"Детали:\n{traceback.format_exc()}")
         return pd.DataFrame()
+
 # ==============================================
-# ФУНКЦИИ ДЛЯ РАСПРЕДЕЛЕНИЯ ПО АУДИТОРАМ (ГЕОГРАФИЧЕСКОЕ РАЗДЕЛЕНИЕ)
+# ФУНКЦИИ ДЛЯ РАСПРЕДЕЛЕНИЯ ПО АУДИТОРАМ
 # ==============================================
-
-def divide_points_by_direction(points_df, n_auditors, city):
-    """
-    Разделяет точки на географические полигоны с равным распределением
-    """
-    if n_auditors == 1:
-        return [points_df]
-    
-    if n_auditors <= 0 or points_df.empty:
-        return []
-    
-    points_df = points_df.copy().reset_index(drop=True)
-    
-    # Для воспроизводимости сортируем по ID
-    points_df = points_df.sort_values('ID_Точки').reset_index(drop=True)
-    
-    if n_auditors == 2:
-        # Север-Юг: сортируем по широте, делим пополам
-        points_sorted = points_df.sort_values('Широта', ascending=False).reset_index(drop=True)
-        split_idx = len(points_sorted) // 2
-        
-        north = points_sorted.iloc[:split_idx].copy()  # Север (более высокие широты)
-        south = points_sorted.iloc[split_idx:].copy()  # Юг
-        
-        return [north, south]
-    
-    elif n_auditors == 3:
-        # Север-Юго-Восток-Юго-Запад
-        # Сначала находим самые северные точки для "Севера"
-        points_sorted = points_df.sort_values('Широта', ascending=False).reset_index(drop=True)
-        
-        # 1/3 самых северных точек = Север
-        north_size = len(points_sorted) // 3
-        north = points_sorted.iloc[:north_size].copy()
-        
-        # Остальные точки = Юг
-        south_points = points_sorted.iloc[north_size:].copy()
-        
-        # Делим южные точки на Восток и Запад по долготе
-        if not south_points.empty:
-            # Сортируем южные точки по долготе
-            south_sorted = south_points.sort_values('Долгота').reset_index(drop=True)
-            
-            # Медианная долгота для разделения
-            median_lon = south_sorted['Долгота'].median()
-            
-            southeast = south_sorted[south_sorted['Долгота'] >= median_lon].copy()
-            southwest = south_sorted[south_sorted['Долгота'] < median_lon].copy()
-            
-            # Балансируем размеры ЮВ и ЮЗ
-            target_south_size = len(south_sorted) // 2
-            if len(southeast) > target_south_size + 2:
-                # Перемещаем самые западные точки из ЮВ в ЮЗ
-                excess = len(southeast) - target_south_size
-                points_to_move = southeast.nsmallest(excess, 'Долгота')
-                southeast = southeast.drop(points_to_move.index)
-                southwest = pd.concat([southwest, points_to_move], ignore_index=True)
-            elif len(southwest) > target_south_size + 2:
-                # Перемещаем самые восточные точки из ЮЗ в ЮВ
-                excess = len(southwest) - target_south_size
-                points_to_move = southwest.nlargest(excess, 'Долгота')
-                southwest = southwest.drop(points_to_move.index)
-                southeast = pd.concat([southeast, points_to_move], ignore_index=True)
-            
-            return [north, southeast, southwest]
-        
-        return [north, pd.DataFrame(), pd.DataFrame()]
-    
-    elif n_auditors == 4:
-        # Север-Восток-Юг-Запад через квадранты
-        # Вычисляем медианные координаты
-        median_lat = points_df['Широта'].median()
-        median_lon = points_df['Долгота'].median()
-        
-        # Создаем квадранты
-        ne_mask = (points_df['Широта'] >= median_lat) & (points_df['Долгота'] >= median_lon)
-        nw_mask = (points_df['Широта'] >= median_lat) & (points_df['Долгота'] < median_lon)
-        se_mask = (points_df['Широта'] < median_lat) & (points_df['Долгота'] >= median_lon)
-        sw_mask = (points_df['Широта'] < median_lat) & (points_df['Долгота'] < median_lon)
-        
-        ne_points = points_df[ne_mask].copy()  # Северо-Восток → Север
-        nw_points = points_df[nw_mask].copy()  # Северо-Запад → Запад
-        se_points = points_df[se_mask].copy()  # Юго-Восток → Восток
-        sw_points = points_df[sw_mask].copy()  # Юго-Запад → Юг
-        
-        # Возвращаем в порядке: Север, Восток, Юг, Запад
-        return [ne_points, se_points, sw_points, nw_points]
-    
-    else:
-        # Для другого количества - простое равное деление
-        return np.array_split(points_df, n_auditors)
-
-
-def balance_point_groups_final(groups, n_auditors):
-    """
-    Финальная балансировка групп по количеству точек
-    Возвращает примерно равные по размеру группы
-    """
-    if not groups or n_auditors <= 0:
-        return []
-    
-    # Удаляем пустые группы
-    valid_groups = [g for g in groups if g is not None and not g.empty]
-    
-    if not valid_groups:
-        # Если все группы пустые, возвращаем оригинальные
-        return groups[:n_auditors] if len(groups) >= n_auditors else groups
-    
-    # Объединяем все точки
-    all_points = pd.concat(valid_groups, ignore_index=True)
-    
-    # Сортируем для воспроизводимости
-    all_points = all_points.sort_values('ID_Точки').reset_index(drop=True)
-    
-    # Делим на равные части
-    chunk_size = len(all_points) // n_auditors
-    remainder = len(all_points) % n_auditors
-    
-    balanced_groups = []
-    start_idx = 0
-    
-    for i in range(n_auditors):
-        # Определяем размер этой группы
-        size = chunk_size + (1 if i < remainder else 0)
-        end_idx = start_idx + size
-        
-        if start_idx < len(all_points):
-            group = all_points.iloc[start_idx:end_idx].copy()
-        else:
-            # Создаем пустую группу с правильными колонками
-            group = pd.DataFrame(columns=all_points.columns)
-        
-        balanced_groups.append(group)
-        start_idx = end_idx
-    
-    return balanced_groups
-
 
 def distribute_points_to_auditors(points_df, auditors_df):
-    """Распределяет точки по аудиторам с географическим разделением"""
+    """Распределяет точки по аудиторам внутри каждого города"""
     
     if points_df is None or points_df.empty:
         st.error("❌ Нет данных о точках для распределения")
@@ -2231,62 +644,64 @@ def distribute_points_to_auditors(points_df, auditors_df):
             st.warning(f"⚠️ В городе {city} нет аудиторов")
             continue
         
-        n_auditors = len(city_auditors)
-        
-        # Разделяем точки по географическим направлениям
-        point_groups = divide_points_by_direction(city_points, n_auditors, city)
-        
-        # Финальная балансировка (если групп больше чем аудиторов)
-        if len(point_groups) > n_auditors:
-            point_groups = point_groups[:n_auditors]
-        elif len(point_groups) < n_auditors:
-            # Добавляем пустые группы если нужно
-            while len(point_groups) < n_auditors:
-                point_groups.append(pd.DataFrame(columns=city_points.columns))
-        
-        # Направления для названий полигонов
-        if n_auditors == 1:
-            directions = [f"{city}"]
-        elif n_auditors == 2:
-            directions = [f"{city}-Север", f"{city}-Юг"]
-        elif n_auditors == 3:
-            directions = [f"{city}-Север", f"{city}-Юго-Восток", f"{city}-Юго-Запад"]
-        elif n_auditors == 4:
-            directions = [f"{city}-Север", f"{city}-Восток", f"{city}-Юг", f"{city}-Запад"]
-        else:
-            directions = [f"{city}-Зона-{i+1}" for i in range(n_auditors)]
-        
-        # Распределяем группы точек по аудиторам
-        for i in range(n_auditors):
-            if i >= len(city_auditors) or i >= len(point_groups) or i >= len(directions):
-                continue
-                
-            auditor = city_auditors[i]
-            point_group = point_groups[i]
-            direction = directions[i]
-            
-            if point_group.empty:
-                st.warning(f"⚠️ Аудитор {auditor} в городе {city} не получил точек")
-                continue
-            
-            polygon_name = direction
-            
-            for _, point in point_group.iterrows():
+        if len(city_auditors) == 1:
+            # Один аудитор - все точки ему
+            auditor = city_auditors[0]
+            for _, point in city_points.iterrows():
                 results.append({
                     'ID_Точки': point['ID_Точки'],
                     'Аудитор': auditor,
                     'Город': city,
-                    'Полигон': polygon_name
+                    'Полигон': city
                 })
             
-            polygons_info[polygon_name] = {
+            # Создаем полигон для одного аудитора
+            polygons_info[f"{city}"] = {
                 'auditor': auditor,
-                'city': city,
-                'points': point_group[['ID_Точки', 'Широта', 'Долгота']].values.tolist()
+                'city': city,  # ← ДОБАВЛЕНО
+                'points': city_points[['ID_Точки', 'Широта', 'Долгота']].values.tolist()
             }
+            
+        else:
+            # Несколько аудиторов - делим точки
+            city_points = city_points.sort_values('Долгота').reset_index(drop=True)
+            
+            directions = ['Запад', 'Центр', 'Восток', 'Север', 'Юг', 
+                         'Северо-Запад', 'Северо-Восток', 'Юго-Запад', 'Юго-Восток']
+            
+            n = len(city_auditors)
+            chunk_size = len(city_points) // n
+            
+            for i, auditor in enumerate(city_auditors):
+                start_idx = i * chunk_size
+                if i == n - 1:
+                    end_idx = len(city_points)
+                else:
+                    end_idx = (i + 1) * chunk_size
+                
+                auditor_points = city_points.iloc[start_idx:end_idx]
+                
+                if len(auditor_points) == 0:
+                    st.warning(f"⚠️ Аудитор {auditor} в городе {city} не получил точек")
+                    continue
+                
+                polygon_name = f"{city}-{directions[i % len(directions)]}"
+                for _, point in auditor_points.iterrows():
+                    results.append({
+                        'ID_Точки': point['ID_Точки'],
+                        'Аудитор': auditor,
+                        'Город': city,
+                        'Полигон': polygon_name
+                    })
+                
+                polygons_info[polygon_name] = {
+                    'auditor': auditor,
+                    'city': city,  # ← ДОБАВЛЕНО
+                    'points': auditor_points[['ID_Точки', 'Широта', 'Долгота']].values.tolist()
+                }
     
     if not results:
-        st.warning("⚠️ Не удалось распределить точки по аудиторам")
+        st.warning("⚠️ Не удалось распределить точки по аудиторам (нет подходящих городов)")
         return None, None
     
     return pd.DataFrame(results), polygons_info
@@ -3006,6 +1421,7 @@ st.markdown("---")
 
 # ТОЛЬКО ОДНА КНОПКА ВСЕМ КОДЕ!
 calculate_button = st.button("🚀 Рассчитать план", type="primary", use_container_width=True, key="calculate_plan_btn")
+
 if calculate_button:
     
     if 'data_file' not in st.session_state or st.session_state.data_file is None:
@@ -3076,13 +1492,14 @@ if calculate_button:
             # Распределяем точки по аудиторам
             points_assignment_df, polygons_info = distribute_points_to_auditors(points_df, auditors_df)
             
+            # ИСПРАВЛЕНИЕ: проверяем оба возвращаемых значения
             if points_assignment_df is None or polygons_info is None:
                 st.error("❌ Не удалось распределить точки по аудиторам")
                 st.stop()
             
             # ✅ СОХРАНЯЕМ ДАННЫЕ ДЛЯ ВЫГРУЗКИ
-            st.session_state.points_assignment_df = points_assignment_df
-            st.session_state.polygons_info = polygons_info
+            st.session_state.points_assignment_df = points_assignment_df  # ДЛЯ GOOGLE MAPS
+            st.session_state.polygons_info = polygons_info  # ДЛЯ ПОЛИГОНОВ
             
             # Генерируем полигоны
             polygons = generate_polygons(polygons_info)
@@ -3101,9 +1518,8 @@ if calculate_button:
                 st.error("❌ Не удалось распределить посещения по неделям")
                 st.stop()
             
-            st.session_state.detailed_plan_df = detailed_plan_df
             st.success(f"✅ Распределено {len(detailed_plan_df)} записей по неделям")
-
+        
         # Показываем краткую статистику распределения
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -3115,35 +1531,7 @@ if calculate_button:
         with col4:
             total_visits = points_df['Кол-во_посещений'].sum()
             st.metric("Всего посещений", total_visits)
-
-        # ==============================================
-        # ОПТИМИЗАЦИЯ МАРШРУТОВ ПО ДНЯМ
-        # ==============================================
         
-        with st.spinner("🗺️ Оптимизация маршрутов по дням недели..."):
-            try:
-                # Создаем таблицу с маршрутами
-                routes_df = create_weekly_route_schedule(
-                    points_df,
-                    points_assignment_df,
-                    auditors_df,  # ← ТОЛЬКО 5 АРГУМЕНТОВ!
-                    year,
-                    quarter,
-                    use_enhanced_split=use_enhanced_split
-                )
-                
-                if not routes_df.empty:
-                    st.session_state.routes_df = routes_df
-                    st.success(f"✅ Построены маршруты: {len(routes_df)} записей")
-                    st.info("📋 Маршруты доступны во вкладке 'План посещений' для выгрузки в формате EasyMerch")
-                else:
-                    st.warning("⚠️ Не удалось построить маршруты")
-                    
-            except Exception as e:
-                st.error(f"❌ Ошибка при оптимизации маршрутов: {str(e)}")
-                import traceback
-                st.error(f"Детали ошибки:\n{traceback.format_exc()}")
-
         # ==============================================
         # ПОЛНЫЙ РАСЧЕТ СО СТАТИСТИКОЙ
         # ==============================================
@@ -3160,7 +1548,7 @@ if calculate_button:
                 st.session_state.type_stats_df = type_stats_df
                 st.session_state.summary_df = summary_df
                 st.session_state.details_df = detailed_with_fact
-                st.session_state.plan_calculated = True  
+                st.session_state.plan_calculated = True  # ← ВОТ ТУТ, ВНУТРИ БЛОКА!
                 
                 st.success("✅ Полный расчет завершен! Статистика готова.")
                 
@@ -3192,7 +1580,7 @@ if calculate_button:
                 st.session_state.polygons_info = polygons_info
                 st.session_state.points_assignment_df = points_assignment_df
                 st.session_state.detailed_plan_df = detailed_plan_df
-                st.session_state.plan_calculated = True 
+                st.session_state.plan_calculated = True  # ← И ЗДЕСЬ ТОЖЕ!
                 
                 st.success("✅ План частично рассчитан! Некоторые функции могут быть недоступны.")
     
@@ -3264,7 +1652,7 @@ st.markdown("---")
 st.caption("📋 **Часть 2/5:** Функции обработки данных, генерация полигонов, распределение посещений по неделям")
 
 # ==============================================
-# ВКЛАДКИ С РЕЗУЛЬТАТАМИ 
+# ВКЛАДКИ С РЕЗУЛЬТАТАМИ (ИСПРАВЛЕННЫЙ КОД)
 # ==============================================
 
 if st.session_state.plan_calculated:
@@ -3438,184 +1826,53 @@ if st.session_state.plan_calculated:
                                 height=400,
                                 hide_index=True
                             )
-                           
-                            # Показываем краткий предпросмотр маршрутов
-                            if 'routes_df' in st.session_state and st.session_state.routes_df is not None:
-                                st.markdown("---")
-                                st.subheader("🗺️ Маршруты для EasyMerch")
-                                
-                                routes_df = st.session_state.routes_df
-                                
-                                if not routes_df.empty:
-                                    # Быстрые фильтры
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        # Показываем только первые 20 строк для предпросмотра
-                                        preview_df = routes_df.head(20)
-                                        st.write(f"**Предпросмотр (первые 20 из {len(routes_df)} строк):**")
-                                        st.dataframe(preview_df, use_container_width=True, height=300)
-                                    
-                                    with col2:
-                                        # Статистика
-                                        st.write("**📊 Статистика маршрутов:**")
-                                        st.write(f"• Всего записей: {len(routes_df)}")
-                                        st.write(f"• Аудиторов: {routes_df['Login пользователя'].nunique()}")
-                                        st.write(f"• Недель: {routes_df['Цикл посещения'].nunique()}")
-                                        st.write(f"• Уникальных точек: {routes_df['L1 Name'].nunique()}")
-                                        
-                                        # Общее количество визитов
-                                        total_visits = routes_df['ЧИСЛО визитов в НЕДЕЛЮ'].sum()
-                                        st.write(f"• Всего визитов в неделю: {total_visits}")
-                                else:
-                                    st.info("Маршруты рассчитаны, но данные пустые")
                             
-                            # Выгрузка данных
+                            # Выгрузка в Excel
                             st.markdown("---")
                             st.subheader("💾 Выгрузка данных")
-
                             
-                            # Теперь 3 колонки: фильтр, все данные, EasyMerch Excel
-                            col1, col2, col3 = st.columns(3)
+                            col1, col2 = st.columns(2)
                             
                             with col1:
-                                # Выгрузка отфильтрованных данных в Excel
-                                if filtered_df is not None and not filtered_df.empty:
-                                    try:
-                                        excel_buffer = io.BytesIO()
-                                        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                                            filtered_df.to_excel(writer, sheet_name='План_посещений', index=False)
-                                        
-                                        excel_data = excel_buffer.getvalue()
-                                        st.download_button(
-                                            label="📥 Скачать Excel (фильтр)",
-                                            data=excel_data,
-                                            file_name=f"план_посещений_{year}_Q{quarter}_фильтр.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True,
-                                            help="Только отфильтрованные данные"
-                                        )
-                                    except Exception as e:
-                                        st.error(f"❌ Ошибка Excel: {str(e)}")
-                                else:
-                                    st.info("Нет данных")
+                                # Выгрузка отфильтрованных данных
+                                try:
+                                    excel_buffer = io.BytesIO()
+                                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                                        filtered_df.to_excel(writer, sheet_name='План_посещений', index=False)
+                                    
+                                    excel_data = excel_buffer.getvalue()
                                     st.download_button(
                                         label="📥 Скачать Excel (фильтр)",
-                                        data=b"",
-                                        file_name="план_посещений.xlsx",
+                                        data=excel_data,
+                                        file_name=f"план_посещений_{year}_Q{quarter}_фильтр.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        use_container_width=True,
-                                        disabled=True
+                                        use_container_width=True
                                     )
+                                except Exception as e:
+                                    st.error(f"❌ Ошибка: {str(e)}")
                             
                             with col2:
-                                # Выгрузка всех данных в Excel
-                                if summary_df is not None and not summary_df.empty:
-                                    try:
-                                        excel_buffer = io.BytesIO()
-                                        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                                            summary_df.to_excel(writer, sheet_name='План_посещений', index=False)
-                                        
-                                        excel_data = excel_buffer.getvalue()
-                                        st.download_button(
-                                            label="📥 Скачать Excel (все данные)",
-                                            data=excel_data,
-                                            file_name=f"план_посещений_{year}_Q{quarter}_все.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True,
-                                            help="Все данные плана посещений"
-                                        )
-                                    except Exception as e:
-                                        st.error(f"❌ Ошибка Excel: {str(e)}")
-                                else:
-                                    st.info("Нет данных")
+                                # Выгрузка всех данных
+                                try:
+                                    excel_buffer = io.BytesIO()
+                                    with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                                        summary_df.to_excel(writer, sheet_name='План_посещений', index=False)
+                                    
+                                    excel_data = excel_buffer.getvalue()
                                     st.download_button(
                                         label="📥 Скачать Excel (все данные)",
-                                        data=b"",
-                                        file_name="план_посещений.xlsx",
+                                        data=excel_data,
+                                        file_name=f"план_посещений_{year}_Q{quarter}_все.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        use_container_width=True,
-                                        disabled=True
+                                        use_container_width=True
                                     )
-                            
-                            with col3:
-                                # Выгрузка для EasyMerch в Excel
-                                if 'routes_df' in st.session_state and st.session_state.routes_df is not None:
-                                    routes_df = st.session_state.routes_df
-                                    
-                                    if routes_df is not None and not routes_df.empty:
-                                        with st.spinner("🔄 Подготовка Excel файла..."):
-                                            try:
-                                                # Создаем Excel файл
-                                                excel_data = create_easymerch_excel(routes_df, st.session_state.points_df)
-                                                
-                                                if excel_data:
-                                                    st.download_button(
-                                                        label="📊 EasyMerch (Excel)",
-                                                        data=excel_data,
-                                                        file_name=f"easymerch_маршруты_{year}_Q{quarter}.xlsx",
-                                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                                        use_container_width=True,
-                                                        help="Полный отчет для EasyMerch с инструкцией и статистикой"
-                                                    )
-                                                    
-                                                    # Информация о файле
-                                                    st.caption(f"📁 {len(routes_df)} записей, {routes_df['Login пользователя'].nunique()} аудиторов")
-                                                else:
-                                                    st.error("❌ Не удалось создать файл")
-                                                    
-                                            except Exception as e:
-                                                st.error(f"❌ Ошибка создания Excel: {str(e)}")
-                                    else:
-                                        st.info("Маршруты не рассчитаны")
-                                        st.download_button(
-                                            label="📊 EasyMerch (Excel)",
-                                            data=b"",
-                                            file_name="маршруты.xlsx",
-                                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                            use_container_width=True,
-                                            disabled=True,
-                                            help="Сначала рассчитайте маршруты"
-                                        )
-                                else:
-                                    st.info("Маршруты не рассчитаны")
-                                    st.download_button(
-                                        label="📊 EasyMerch (Excel)",
-                                        data=b"",
-                                        file_name="маршруты.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        use_container_width=True,
-                                        disabled=True,
-                                        help="Сначала рассчитайте маршруты"
-                                    )
-                            
-                            # Информация о формате EasyMerch Excel
-                            st.markdown("---")
-                            with st.expander("📋 Формат EasyMerch Excel", expanded=False):
-                                st.markdown("""
-                                **Excel файл содержит 4 листа:**
-                                
-                                ### 📄 **1. Маршруты**
-                                Основные данные в формате EasyMerch для импорта:
-                                - Address | L1 Name | ЧИСЛО визитов в НЕДЕЛЮ | Login пользователя
-                                - Пн | Вт | Ср | Чт | Пт | Сб | Вс
-                                - Цикл посещения | Дата начала цикла посещения
-                                
-                                ### 📖 **2. Инструкция**
-                                Подробное описание всех полей с примерами заполнения
-                                
-                                ### 📊 **3. Сводка**
-                                Статистика по всему плану визитов
-                                
-                                ### 👥 **4. Аудиторы**
-                                Распределение нагрузки по сотрудникам
-                                
-                                ---
-                                **🔥 Особенности:**
-                                - Автоподбор ширины колонок
-                                - Готов к печати
-                                - Сохраняет форматирование
-                                - Поддерживает русские названия колонок
-                                """)
+                                except Exception as e:
+                                    st.error(f"❌ Ошибка: {str(e)}")
+                        else:
+                            st.info("Нет данных по выбранным фильтрам")
+                    else:
+                        st.info("Нет данных для отображения")
+            current_tab += 1
         
         # ВКЛАДКА 3: Диаграммы
         if "📈 Диаграммы" in available_tabs:
@@ -3922,19 +2179,7 @@ if st.session_state.plan_calculated:
         st.caption(f"📊 Данные: {len(st.session_state.points_df) if st.session_state.points_df is not None else 0} точек, "
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
-    
     current_tab += 1
-
-
-
-
-
-
-
-
-
-
-
 
 
 
