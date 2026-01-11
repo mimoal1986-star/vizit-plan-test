@@ -1,4 +1,5 @@
 # Картография
+from sklearn.cluster import KMeans
 try:
     import folium
     from streamlit_folium import folium_static
@@ -695,8 +696,6 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         
         
         # === 4. КЛАСТЕРИЗАЦИЯ ===
-        try:
-            from sklearn.cluster import KMeans
             
             # Подготовка координат
             coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
@@ -3276,6 +3275,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
