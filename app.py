@@ -752,8 +752,8 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             if lat_range > 0 and lon_range > 0:
                 ratio = max(lat_range, lon_range) / min(lat_range, lon_range)
                 
-                # Если соотношение больше 2:1 (слишком вытянуто)
-                if ratio > 2.0:
+                # ДЕЛАЕМ БАЛАНСИРОВКУ ДЛЯ ЛЮБОГО ratio 
+                if ratio > 1.3:
                     if lat_range > lon_range:
                         # Сжимаем более длинную ось (широту)
                         scale_factor = lon_range / lat_range
@@ -3283,6 +3283,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
