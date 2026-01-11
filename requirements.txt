@@ -1,7 +1,9 @@
-streamlit>=1.28.0
-pandas>=2.0.0
-numpy>=1.24.0
-openpyxl>=3.1.0
-plotly>=5.17.0
-folium>=0.14.0           
-streamlit-folium>=0.15.0 
+streamlit==1.38.0
+pandas==2.2.3
+numpy==2.0.2
+plotly==5.24.1
+scikit-learn==1.5.2
+openpyxl==3.1.5
+folium==0.19.1
+streamlit-folium==0.19.1
+workalendar==25.1.0
