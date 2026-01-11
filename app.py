@@ -670,10 +670,6 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
     УНИВЕРСАЛЬНЫЙ АЛГОРИТМ ДЛЯ ГОРОДОВ-МИЛЛИОННИКОВ РОССИИ
     """
     try:
-        import numpy as np
-        import math
-        from datetime import datetime, date  # ← ИСПРАВЛЕНО
-        
         if not auditor_points or not working_days:
             return []
         
@@ -689,6 +685,7 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             try:
                 lat = float(point['Широта'])
                 lon = float(point['Долгота'])
+                # Проверка на валидные координаты России
                 if 41 <= lat <= 82 and 19 <= lon <= 180:
                     valid_points.append(point)
             except (ValueError, TypeError):
@@ -699,38 +696,104 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         
         # === 2. ЕСЛИ ТОЧЕК МАЛО ===
         if len(valid_points) <= K:
+            # Просто распределяем по дням
             return simple_distribute_points(valid_points, working_days, auditor_id)
         
-        # === 3. КЛАСТЕРИЗАЦИЯ С БАЛАНСИРОВКОЙ ===
+        # === 3. АНАЛИЗ ГЕОГРАФИЧЕСКОГО РАСПРЕДЕЛЕНИЯ ===
+        lats = [p['Широта'] for p in valid_points]
+        lons = [p['Долгота'] for p in valid_points]
+        
+        lat_min, lat_max = min(lats), max(lats)
+        lon_min, lon_max = min(lons), max(lons)
+        
+        lat_range = lat_max - lat_min
+        lon_range = lon_max - lon_min
+        
+        # Приблизительный перевод в километры
+        avg_lat = np.mean(lats)
+        lat_km = lat_range * 111
+        lon_km = lon_range * 111 * math.cos(math.radians(avg_lat))
+        
+        # Определяем тип распределения
+        city_type = "compact"
+        if lat_km > 50 or lon_km > 50:
+            city_type = "scattered"
+        elif max(lat_km, lon_km) / min(lat_km, lon_km) > 3:
+            city_type = "linear"
+        
+        # === 4. КЛАСТЕРИЗАЦИЯ ===
         try:
             from sklearn.cluster import KMeans
             
             # Подготовка координат
             coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
             
-            # БАЛАНСИРОВКА ОСЕЙ: максимум 1:1.5
-            lat_min, lat_max = coords[:, 0].min(), coords[:, 0].max()
-            lon_min, lon_max = coords[:, 1].min(), coords[:, 1].max()
+            # Масштабирование для разных типов городов
+            if city_type == "linear":
+                # Для вытянутых городов
+                if lon_range > lat_range * 2:
+                    # Вытянут по долготе
+                    scaled_coords = coords * [1.0, 2.0]
+                else:
+                    # Вытянут по широте
+                    scaled_coords = coords * [2.0, 1.0]
+            else:
+                # Нормализация с учетом широты
+                lon_scale = math.cos(math.radians(avg_lat))
+                scaled_coords = coords.copy()
+                scaled_coords[:, 1] *= lon_scale
+                
+            # Проверяем и балансируем оси для предотвращения "вермишели"
+            
+            # Вычисляем диапазоны масштабированных координат
+            lat_min = scaled_coords[:, 0].min()
+            lat_max = scaled_coords[:, 0].max()
+            lon_min = scaled_coords[:, 1].min()
+            lon_max = scaled_coords[:, 1].max()
+            
             lat_range = lat_max - lat_min
             lon_range = lon_max - lon_min
             
-            scaled_coords = coords.copy()
-            
+            # Балансируем только если есть значительная разница (> 2:1)
             if lat_range > 0 and lon_range > 0:
                 ratio = max(lat_range, lon_range) / min(lat_range, lon_range)
                 
-                if ratio > 1.5:
+                # ДЕЛАЕМ БАЛАНСИРОВКУ ДЛЯ ЛЮБОГО ratio 
+                if ratio > 1.1:
                     if lat_range > lon_range:
-                        scale_factor = (lon_range * 1.5) / lat_range
-                        if scale_factor > 0:
-                            scaled_coords[:, 0] *= scale_factor
+                        # Сжимаем более длинную ось (широту)
+                        scale_factor = lon_range / lat_range
+                        scaled_coords[:, 0] = scaled_coords[:, 0] * scale_factor
+                        # Для отладки можно добавить:
+                        # print(f"Сжали широту в {scale_factor:.2f} раз")
                     else:
-                        scale_factor = (lat_range * 1.5) / lon_range
-                        if scale_factor > 0:
-                            scaled_coords[:, 1] *= scale_factor
+                        # Сжимаем более длинную ось (долготу)
+                        scale_factor = lat_range / lon_range
+                        scaled_coords[:, 1] = scaled_coords[:, 1] * scale_factor
+                        # Для отладки можно добавить:
+                        # print(f"Сжали долготу в {scale_factor:.2f} раз")
+            # Гарантируем max ratio = 1.5
+            final_lat_range = scaled_coords[:, 0].max() - scaled_coords[:, 0].min()
+            final_lon_range = scaled_coords[:, 1].max() - scaled_coords[:, 1].min()
+            final_ratio = max(final_lat_range, final_lon_range) / min(final_lat_range, final_lon_range)
             
-            # Кластеризация
-            kmeans = KMeans(n_clusters=K, init='k-means++', n_init=10, random_state=42)
+            if final_ratio > 1.5:
+                # Принудительно доводим до 1.5
+                force_factor = 1.5 / final_ratio
+                if final_lat_range > final_lon_range:
+                    scaled_coords[:, 0] *= force_factor
+                else:
+                    scaled_coords[:, 1] *= force_factor
+                
+            print(f"Принудительная коррекция: {final_ratio:.2f} → 1.5")
+            
+            # Кластеризация KMeans
+            kmeans = KMeans(
+                n_clusters=K,
+                init='k-means++',
+                n_init=10,
+                random_state=42
+            )
             labels = kmeans.fit_predict(scaled_coords)
             
             # Группировка по кластерам
@@ -740,54 +803,38 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
                     daily_clusters[label].append(point)
             
         except ImportError:
+            # Если нет sklearn, используем простую географическую сортировку
+            st.warning("⚠️ Установите scikit-learn для лучшей кластеризации")
             return simple_geographic_distribution(valid_points, working_days, auditor_id)
-            
+        
         except Exception as e:
+            st.error(f"❌ Ошибка кластеризации: {str(e)}")
             return simple_geographic_distribution(valid_points, working_days, auditor_id)
         
-        # === 4. БАЛАНСИРОВКА КЛАСТЕРОВ ===
-        # Используем существующую функцию или простую логику
-        def balance_clusters_simple(clusters, target_k):
-            """Простая балансировка кластеров"""
-            all_points = []
-            for cluster in clusters:
-                all_points.extend(cluster)
-            
-            if len(all_points) == 0:
-                return [[] for _ in range(target_k)]
-            
-            sorted_points = sorted(all_points, key=lambda p: (-p['Широта'], p['Долгота']))
-            balanced = [[] for _ in range(target_k)]
-            for i, point in enumerate(sorted_points):
-                balanced[i % target_k].append(point)
-            return balanced
-        
+        # === 5. БАЛАНСИРОВКА КЛАСТЕРОВ ===
+        # Перераспределяем точки если кластеры сильно различаются по размеру
         balanced_clusters = balance_clusters_simple(daily_clusters, K)
         
-        # === 5. ПОСТРОЕНИЕ МАРШРУТОВ ===
+        # === 6. ПОСТРОЕНИЕ МАРШРУТОВ ===
         routes = []
         
         for day_idx, (day_date, cluster_points) in enumerate(zip(working_days, balanced_clusters)):
             if not cluster_points:
                 continue
             
+            # Обработка даты
             if isinstance(day_date, date) and not isinstance(day_date, datetime):
                 visit_datetime = datetime.combine(day_date, datetime.min.time())
             else:
                 visit_datetime = day_date
             
-            # Определяем lat_range и lon_range для сортировки
-            if cluster_points:
-                cluster_lats = [p['Широта'] for p in cluster_points]
-                cluster_lons = [p['Долгота'] for p in cluster_points]
-                cluster_lat_range = max(cluster_lats) - min(cluster_lats) if cluster_lats else 0
-                cluster_lon_range = max(cluster_lons) - min(cluster_lons) if cluster_lons else 0
-                
-                if len(cluster_points) > 1:
-                    if cluster_lat_range > 0 and cluster_lon_range > 0 and cluster_lon_range > cluster_lat_range:
-                        cluster_points.sort(key=lambda p: p['Долгота'])
-                    else:
-                        cluster_points.sort(key=lambda p: (-p['Широта'], p['Долгота']))
+            # Сортировка точек внутри кластера для лучшего маршрута
+            if len(cluster_points) > 1:
+                # Сортируем по географическому порядку
+                if city_type == "linear" and lon_range > lat_range:
+                    cluster_points.sort(key=lambda p: p['Долгота'])  # запад → восток
+                else:
+                    cluster_points.sort(key=lambda p: (-p['Широта'], p['Долгота']))  # север→юг, запад→восток
             
             # Строим маршрут
             try:
@@ -795,6 +842,7 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             except:
                 optimized_route = cluster_points
             
+            # Добавляем точки
             for point in optimized_route:
                 routes.append({
                     'ID_Точки': point['ID_Точки'],
@@ -811,7 +859,9 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         return routes
     
     except Exception as e:
-        # ВСЕГДА возвращаем список
+        st.error(f"❌ Критическая ошибка: {str(e)}")
+        import traceback
+        st.error(f"Детали:\n{traceback.format_exc()}")
         return []
 
 
@@ -3253,11 +3303,6 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
-
-
-
-
-
 
 
 
