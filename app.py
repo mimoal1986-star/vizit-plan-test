@@ -43,7 +43,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📊 Калькулятор плана визитов по сотрудникам")
+st.title("📊 Калькулятор плана визитов по сотрудникам тест")
 st.markdown("---")
 
 # ==============================================
@@ -2180,6 +2180,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
