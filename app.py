@@ -742,50 +742,6 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
                 lon_scale = math.cos(math.radians(avg_lat))
                 scaled_coords = coords.copy()
                 scaled_coords[:, 1] *= lon_scale
-                
-            # Проверяем и балансируем оси для предотвращения "вермишели"
-            
-            # Вычисляем диапазоны масштабированных координат
-            lat_min = scaled_coords[:, 0].min()
-            lat_max = scaled_coords[:, 0].max()
-            lon_min = scaled_coords[:, 1].min()
-            lon_max = scaled_coords[:, 1].max()
-            
-            lat_range = lat_max - lat_min
-            lon_range = lon_max - lon_min
-            
-            # Балансируем только если есть значительная разница (> 2:1)
-            if lat_range > 0 and lon_range > 0:
-                ratio = max(lat_range, lon_range) / min(lat_range, lon_range)
-                
-                # ДЕЛАЕМ БАЛАНСИРОВКУ ДЛЯ ЛЮБОГО ratio 
-                if ratio > 1.1:
-                    if lat_range > lon_range:
-                        # Сжимаем более длинную ось (широту)
-                        scale_factor = lon_range / lat_range
-                        scaled_coords[:, 0] = scaled_coords[:, 0] * scale_factor
-                        # Для отладки можно добавить:
-                        # print(f"Сжали широту в {scale_factor:.2f} раз")
-                    else:
-                        # Сжимаем более длинную ось (долготу)
-                        scale_factor = lat_range / lon_range
-                        scaled_coords[:, 1] = scaled_coords[:, 1] * scale_factor
-                        # Для отладки можно добавить:
-                        # print(f"Сжали долготу в {scale_factor:.2f} раз")
-            # Гарантируем max ratio = 1.5
-            final_lat_range = scaled_coords[:, 0].max() - scaled_coords[:, 0].min()
-            final_lon_range = scaled_coords[:, 1].max() - scaled_coords[:, 1].min()
-            final_ratio = max(final_lat_range, final_lon_range) / min(final_lat_range, final_lon_range)
-            
-            if final_ratio > 1.5:
-                # Принудительно доводим до 1.5
-                force_factor = 1.5 / final_ratio
-                if final_lat_range > final_lon_range:
-                    scaled_coords[:, 0] *= force_factor
-                else:
-                    scaled_coords[:, 1] *= force_factor
-                
-            print(f"Принудительная коррекция: {final_ratio:.2f} → 1.5")
             
             # Кластеризация KMeans
             kmeans = KMeans(
@@ -3303,12 +3259,6 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
-
-
-
-
-
-
 
 
 
