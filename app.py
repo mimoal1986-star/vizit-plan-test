@@ -740,7 +740,7 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         #  показываем КАКОЙ метод будем использовать
         if SKLEARN_AVAILABLE and len(valid_points) > 1:
             st.info(f"🔧 **Метод расчета:** KMeans кластеризация")
-            st.caption(f"Город: {city}, точек: {len(valid_points)}, рабочих дней: {K}")
+            st.caption(f"Точек: {len(valid_points)}, рабочих дней: {K}")
         else:
             st.info(f"🔧 **Метод расчета:** Географическая сортировка")
             reason = ("scikit-learn не установлен" if not SKLEARN_AVAILABLE 
@@ -3286,6 +3286,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
