@@ -727,21 +727,6 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             # Подготовка координат
             coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
             
-            # Масштабирование для разных типов городов
-            if city_type == "linear":
-                # Для вытянутых городов
-                if lon_range > lat_range * 2:
-                    # Вытянут по долготе
-                    scaled_coords = coords * [1.0, 2.0]
-                else:
-                    # Вытянут по широте
-                    scaled_coords = coords * [2.0, 1.0]
-            else:
-                # Нормализация с учетом широты
-                lon_scale = math.cos(math.radians(avg_lat))
-                scaled_coords = coords.copy()
-                scaled_coords[:, 1] *= lon_scale
-            
             # Кластеризация KMeans
             kmeans = KMeans(
                 n_clusters=K,
@@ -3197,6 +3182,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
