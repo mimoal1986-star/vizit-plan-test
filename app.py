@@ -1124,8 +1124,8 @@ def create_weekly_route_schedule(points_df, points_assignment_df, auditors_df, y
                     'Тип': row.get('Тип', 'Неизвестно')
                 })
         
-        # Создаем ежедневные маршруты
-        daily_visits = create_daily_routes_for_auditor(
+        # Создаем ежедневные маршруты с использованием snake_geographic_distribution
+        daily_visits = snake_geographic_distribution(
             auditor_points, working_days, auditor
         )
         all_visits.extend(daily_visits)
@@ -1195,8 +1195,8 @@ def create_weekly_route_schedule(points_df, points_assignment_df, auditors_df, y
             'Воскресенье': 1 if 6 in days_visited else '',
             'Цикл посещения': week_num,
             'Дата начала цикла посещения': start_date_str,
-            'Широта': f"{latitude:.6f}",  # Добавлено: 6 знаков после запятой
-            'Долгота': f"{longitude:.6f}"   # Добавлено: 6 знаков после запятой
+            'Широта': f"{latitude:.6f}",
+            'Долгота': f"{longitude:.6f}"
         }
         
         final_rows.append(row)
@@ -2607,7 +2607,7 @@ if calculate_button:
                 routes_df = create_weekly_route_schedule(
                     points_df,
                     points_assignment_df,
-                    auditors_df,  # ← ТОЛЬКО 5 АРГУМЕНТОВ!
+                    auditors_df, 
                     year,
                     quarter
                 )
@@ -3403,6 +3403,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
