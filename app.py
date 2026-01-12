@@ -996,8 +996,8 @@ def balance_clusters_simple(clusters, target_k):
 
 
 def simple_dbscan_clustering(points, eps_km=1.2, min_samples=2):
-st.info(f"🔍 DBSCAN параметры: eps={eps_km}км, min_samples={min_samples}")
-st.info(f"🔍 Всего точек: {len(points)}")
+    st.info(f"🔍 DBSCAN параметры: eps={eps_km}км, min_samples={min_samples}")
+    st.info(f"🔍 Всего точек: {len(points)}")
     
     """
     Простая DBSCAN кластеризация для тестирования
@@ -3475,6 +3475,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
