@@ -1,4 +1,12 @@
-# === ИМПОРТЫ (без Streamlit команд!) ===
+# Картография
+try:
+    import folium
+    from streamlit_folium import folium_static
+    FOLIUM_AVAILABLE = True
+except ImportError:
+    FOLIUM_AVAILABLE = False
+    # st.sidebar.warning("⚠️ Для карты установите: pip install folium streamlit-folium")
+import streamlit as st
 import pandas as pd
 import numpy as np
 import math
@@ -16,33 +24,18 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# === ИМПОРТ STREAMLIT (первый!) ===
-import streamlit as st
-
-# === SET_PAGE_CONFIG (ВТОРОЙ, сразу после импорта streamlit!) ===
-st.set_page_config(
-    page_title="Калькулятор плана визитов",
-    page_icon="📊",
-    layout="wide"
-)
-
-# === ТЕПЕРЬ остальные импорты ===
-# Картография
-try:
-    import folium
-    from streamlit_folium import folium_static
-    FOLIUM_AVAILABLE = True
-except ImportError:
-    FOLIUM_AVAILABLE = False
-
 # ГЕОМЕТРИЯ - всегда используем упрощенную версию
 SCIPY_AVAILABLE = False
 try:
+    # Пробуем импортировать scipy
     import scipy
+    # Проверяем, можем ли мы использовать ConvexHull
     from scipy.spatial import ConvexHull
     SCIPY_AVAILABLE = True
-except ImportError:
+    st.sidebar.success("✅ SciPy доступен")
+except:
     SCIPY_AVAILABLE = False
+    st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
 
 # Для расчета рабочих дней с праздниками
 try:
@@ -51,11 +44,15 @@ try:
 except ImportError:
     WORKALENDAR_AVAILABLE = False
 
-# === ТЕПЕРЬ МОЖНО ИСПОЛЬЗОВАТЬ Streamlit команды ===
-if SCIPY_AVAILABLE:
-    st.sidebar.success("✅ SciPy доступен")
-else:
-    st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
+# НАСТРОЙКА СТРАНИЦЫ
+st.set_page_config(
+    page_title="Калькулятор плана визитов",
+    page_icon="📊",
+    layout="wide"
+)
+
+st.title("📊 Калькулятор плана визитов по сотрудникам тест")
+st.markdown("---")
 
 # ==============================================
 # ИНИЦИАЛИЗАЦИЯ SESSION STATE
@@ -83,9 +80,6 @@ if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'plan_partial' not in st.session_state:
     st.session_state.plan_partial = False
-
-st.title("📊 Калькулятор плана визитов по сотрудникам тест")
-st.markdown("---")
 
 # ==============================================
 # БОКОВАЯ ПАНЕЛЬ - НАСТРОЙКИ
@@ -724,9 +718,6 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         # === 4. КЛАСТЕРИЗАЦИЯ ===
         try:
             from sklearn.cluster import KMeans
-
-            # НАМЕРЕННО вызываем ошибку, чтобы всегда попадать в except
-            raise ImportError("Принудительно используем Змейку")
             
             # Подготовка координат
             coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
@@ -762,11 +753,13 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
                     daily_clusters[label].append(point)
             
         except ImportError:
-            # Всегда попадаем сюда
-            return snake_geographic_distribution(valid_points, working_days, auditor_id)
-            
-    except Exception as e:
-        return snake_geographic_distribution(valid_points, working_days, auditor_id)
+            # Если нет sklearn, используем простую географическую сортировку
+            st.warning("⚠️ Установите scikit-learn для лучшей кластеризации")
+            return simple_geographic_distribution(valid_points, working_days, auditor_id)
+        
+        except Exception as e:
+            st.error(f"❌ Ошибка кластеризации: {str(e)}")
+            return simple_geographic_distribution(valid_points, working_days, auditor_id)
         
         # === 5. БАЛАНСИРОВКА КЛАСТЕРОВ ===
         # Перераспределяем точки если кластеры сильно различаются по размеру
@@ -923,149 +916,6 @@ def simple_geographic_distribution(points, working_days, auditor_id):
             })
     
     return routes
-def snake_geographic_distribution(points, working_days, auditor_id):
-    """
-    Распределение точек по дням методом 'Змейка'
-    Создает компактные кластеры с соотношением сторон ~1:1 до 1:2
-    """
-    try:
-        import math
-        
-        if not points or not working_days:
-            return []
-        
-        K = len(working_days)
-        
-        # Шаг 1: Подготавливаем данные
-        points_list = []
-        for point in points:
-            try:
-                points_list.append({
-                    'ID_Точки': str(point.get('ID_Точки', '')),
-                    'Широта': float(point.get('Широта', 0)),
-                    'Долгота': float(point.get('Долгота', 0)),
-                    'Название_Точки': str(point.get('Название_Точки', point.get('ID_Точки', ''))),
-                    'Адрес': str(point.get('Адрес', '')),
-                    'Тип': str(point.get('Тип', 'Неизвестно'))
-                })
-            except (ValueError, TypeError):
-                continue
-        
-        if len(points_list) == 0:
-            return []
-        
-        # Шаг 2: Создаем "змейку"
-        total_points = len(points_list)
-        
-        # Для очень маленьких наборов - простой round-robin
-        if total_points <= K * 2 or total_points <= 10:
-            # Используем старую функцию как fallback
-            return simple_geographic_distribution(points, working_days, auditor_id)
-        
-        # Оптимальное количество строк для квадратной сетки
-        num_rows = max(2, int(math.sqrt(total_points)))
-        
-        # Сортируем все точки по широте (север→юг)
-        points_sorted_by_lat = sorted(points_list, key=lambda p: -p['Широта'])
-        
-        # Делим на строки и сортируем в шахматном порядке
-        rows = []
-        points_per_row = total_points // num_rows
-        remainder = total_points % num_rows
-        
-        start_idx = 0
-        for row_idx in range(num_rows):
-            size = points_per_row + (1 if row_idx < remainder else 0)
-            end_idx = start_idx + size
-            
-            if start_idx >= total_points:
-                break
-                
-            row_points = points_sorted_by_lat[start_idx:end_idx]
-            
-            # Четные строки: запад → восток, нечетные: восток → запад
-            if row_idx % 2 == 0:
-                row_points.sort(key=lambda p: p['Долгота'])  # запад→восток
-            else:
-                row_points.sort(key=lambda p: -p['Долгота'])  # восток→запад
-            
-            rows.append(row_points)
-            start_idx = end_idx
-        
-        # Объединяем все строки в змейку
-        snake_points = []
-        for row in rows:
-            snake_points.extend(row)
-        
-        # Шаг 3: Распределяем точки змейки по дням
-        daily_clusters = []
-        
-        if K > len(snake_points):
-            # Дней больше чем точек
-            for i in range(K):
-                if i < len(snake_points):
-                    daily_clusters.append([snake_points[i]])
-                else:
-                    daily_clusters.append([])
-        else:
-            # Нормальное распределение
-            base_size = len(snake_points) // K
-            remainder_points = len(snake_points) % K
-            
-            start_idx = 0
-            for day_idx in range(K):
-                size = base_size + (1 if day_idx < remainder_points else 0)
-                end_idx = start_idx + size
-                
-                if start_idx < len(snake_points):
-                    daily_clusters.append(snake_points[start_idx:end_idx])
-                    start_idx = end_idx
-                else:
-                    daily_clusters.append([])
-        
-        # Шаг 4: Создаем маршруты
-        routes = []
-        for day_idx, (day_date, cluster_points) in enumerate(zip(working_days, daily_clusters)):
-            if not cluster_points:
-                continue
-            
-            # Преобразуем дату
-            from datetime import datetime, date
-            if isinstance(day_date, date) and not isinstance(day_date, datetime):
-                visit_datetime = datetime.combine(day_date, datetime.min.time())
-            else:
-                visit_datetime = day_date
-            
-            # Оптимизация маршрута внутри дня (если нужно)
-            if len(cluster_points) > 1:
-                try:
-                    optimized_route = WeeklyRouteOptimizer.greedy_route(cluster_points)
-                except Exception:
-                    optimized_route = cluster_points
-            else:
-                optimized_route = cluster_points
-            
-            # Добавляем точки
-            for point in optimized_route:
-                routes.append({
-                    'ID_Точки': point['ID_Точки'],
-                    'Дата': visit_datetime,
-                    'День_недели': visit_datetime.weekday(),
-                    'Аудитор': auditor_id,
-                    'Широта': point['Широта'],
-                    'Долгота': point['Долгота'],
-                    'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
-                    'Адрес': point.get('Адрес', ''),
-                    'Тип': point.get('Тип', 'Неизвестно')
-                })
-        
-        return routes
-        
-    except Exception as e:
-        # В случае ошибки - возвращаем старую функцию как fallback
-        import traceback
-        print(f"Ошибка в snake_geographic_distribution: {str(e)}")
-        return simple_geographic_distribution(points, working_days, auditor_id)
     
 # ==============================================
 # ФУНКЦИИ ДЛЯ СОЗДАНИЯ ВЫХОДНОЙ ТАБЛИЦЫ
@@ -1124,8 +974,8 @@ def create_weekly_route_schedule(points_df, points_assignment_df, auditors_df, y
                     'Тип': row.get('Тип', 'Неизвестно')
                 })
         
-        # Создаем ежедневные маршруты с использованием snake_geographic_distribution
-        daily_visits = snake_geographic_distribution(
+        # Создаем ежедневные маршруты
+        daily_visits = create_daily_routes_for_auditor(
             auditor_points, working_days, auditor
         )
         all_visits.extend(daily_visits)
@@ -1195,8 +1045,8 @@ def create_weekly_route_schedule(points_df, points_assignment_df, auditors_df, y
             'Воскресенье': 1 if 6 in days_visited else '',
             'Цикл посещения': week_num,
             'Дата начала цикла посещения': start_date_str,
-            'Широта': f"{latitude:.6f}",
-            'Долгота': f"{longitude:.6f}"
+            'Широта': f"{latitude:.6f}",  # Добавлено: 6 знаков после запятой
+            'Долгота': f"{longitude:.6f}"   # Добавлено: 6 знаков после запятой
         }
         
         final_rows.append(row)
@@ -2607,7 +2457,7 @@ if calculate_button:
                 routes_df = create_weekly_route_schedule(
                     points_df,
                     points_assignment_df,
-                    auditors_df, 
+                    auditors_df,  # ← ТОЛЬКО 5 АРГУМЕНТОВ!
                     year,
                     quarter
                 )
@@ -3403,23 +3253,6 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
