@@ -740,10 +740,10 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         
         # Определяем тип распределения
         city_type = "compact"
-        if lat_km > 50 or lon_km > 50:
-            city_type = "scattered"
-        elif max(lat_km, lon_km) / min(lat_km, lon_km) > 3:
-            city_type = "linear"
+        # if lat_km > 50 or lon_km > 50:
+        #     city_type = "scattered"
+        # elif max(lat_km, lon_km) / min(lat_km, lon_km) > 3:
+        #     city_type = "linear"
 
         
         K = len(working_days)  # Количество рабочих дней
@@ -764,9 +764,11 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             clustering_method = st.session_state.get('clustering_method', 
                                                    'Авто (KMeans/сортировка)')
             use_dbscan = (clustering_method == "DBSCAN (компактные кластеры)")
-        
+   
         # Пробуем DBSCAN если выбран
         daily_clusters = None
+        dbscan_success = False  # ← ДОБАВИТЬ ФЛАГ
+        
         if use_dbscan:
             st.info(f"🔷 **Пробую DBSCAN...** (тип города: {city_type}, ε={eps_km}км)")
             
@@ -774,36 +776,60 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             dbscan_clusters = simple_dbscan_clustering(
                 valid_points, 
                 eps_km=eps_km,
-                min_samples=3
+                min_samples=2  # ← ИЗМЕНИТЬ на 2!
             )
             
-            if dbscan_clusters and len(dbscan_clusters) > 0:
-                # DBSCAN сработал!
+            if dbscan_clusters and len(dbscan_clusters) >= 10:  # ← ИЗМЕНИТЬ условие!
+                # DBSCAN сработал и нашёл достаточно кластеров!
                 st.success(f"✅ DBSCAN создал {len(dbscan_clusters)} кластеров")
                 
-                # Балансируем кластеры под количество дней
-                if len(dbscan_clusters) <= K:
-                    # Кластеров меньше или равно дням - балансируем
-                    daily_clusters = balance_clusters_simple(dbscan_clusters, K)
-                else:
-                    # Кластеров больше чем дней - используем первые K
-                    daily_clusters = dbscan_clusters[:K]
+                # ЕСЛИ кластеров МЕНЬШЕ чем дней:
+                if len(dbscan_clusters) < K:
+                    st.info(f"🔷 Разделяю {len(dbscan_clusters)} кластеров на {K} рабочих дней...")
+                    
+                    # Используем КОМБИНАЦИЮ: DBSCAN для группировки + KMeans для деления
+                    try:
+                        # Собираем все точки из DBSCAN кластеров
+                        all_dbscan_points = []
+                        for cluster in dbscan_clusters:
+                            all_dbscan_points.extend(cluster)
+                        
+                        # Делим на K кластеров с помощью KMeans
+                        coords = np.array([[p['Широта'], p['Долгота']] for p in all_dbscan_points])
+                        kmeans = KMeans(n_clusters=K, random_state=42)
+                        labels = kmeans.fit_predict(coords)
+                        
+                        # Создаём итоговые кластеры
+                        daily_clusters = [[] for _ in range(K)]
+                        for point, label in zip(all_dbscan_points, labels):
+                            daily_clusters[label].append(point)
+                        
+                        dbscan_success = True
+                        st.info(f"🔷 **Используется:** DBSCAN + KMeans комбинация")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Ошибка комбинированного метода: {str(e)[:50]}")
+                        dbscan_success = False
                 
-                st.info(f"🔷 **Используется:** DBSCAN кластеризация")
+                # ЕСЛИ кластеров БОЛЬШЕ или РАВНО дням:
+                else:
+                    # Балансируем кластеры под количество дней
+                    daily_clusters = balance_clusters_simple(dbscan_clusters, K)
+                    dbscan_success = True
+                    st.info(f"🔷 **Используется:** DBSCAN кластеризация")
+            
             else:
-                # DBSCAN не сработал
-                st.warning("⚠️ DBSCAN не создал кластеры, использую KMeans")
-                use_dbscan = False
+                # DBSCAN не сработал или нашёл мало кластеров
+                if dbscan_clusters:
+                    st.warning(f"⚠️ DBSCAN нашёл только {len(dbscan_clusters)} кластеров")
+                st.warning("Использую KMeans вместо DBSCAN")
+                dbscan_success = False
         
-        # Если DBSCAN не использовался или не сработал, используем старый код
-        if not daily_clusters:
-            # === 4. КЛАСТЕРИЗАЦИЯ (ВАШ СУЩЕСТВУЮЩИЙ КОД) ===
-            # ВСТАВЬТЕ ВЕСЬ ВАШ СУЩЕСТВУЮЩИЙ КОД KMeans/сортировки ЗДЕСЬ
-            # НЕ МЕНЯЙТЕ ЕГО!
-            
-            # ... ваш существующий try-except блок с KMeans ...
-            
-            st.info(f"🔧 **Используется:** {'KMeans' if SKLEARN_AVAILABLE else 'Географическая сортировка'}")
+        # ← ВАЖНО: Добавить условие чтобы KMeans не запускался если DBSCAN успешен
+        if not dbscan_success:
+            # === 4. КЛАСТЕРИЗАЦИЯ (ВАШ СУЩЕСТВУЮЩИЙ КОД KMeans) ===
+            # ВАШ СУЩЕСТВУЮЩИЙ КОД KMeans ЗДЕСЬ
+            st.info(f"🔧 **Используется:** KMeans кластеризация")
             
         
         # === 4. КЛАСТЕРИЗАЦИЯ ===
@@ -969,7 +995,10 @@ def balance_clusters_simple(clusters, target_k):
     return balanced
 
 
-def simple_dbscan_clustering(points, eps_km=5.0, min_samples=3):
+def simple_dbscan_clustering(points, eps_km=1.2, min_samples=2):
+st.info(f"🔍 DBSCAN параметры: eps={eps_km}км, min_samples={min_samples}")
+st.info(f"🔍 Всего точек: {len(points)}")
+    
     """
     Простая DBSCAN кластеризация для тестирования
     Возвращает список кластеров или None при ошибке
@@ -1031,9 +1060,28 @@ def simple_dbscan_clustering(points, eps_km=5.0, min_samples=3):
         
         if not clusters_dict:
             return None
+            
+        # Проверяем, достаточно ли кластеров нашёл DBSCAN
+        n_clusters = len(clusters_dict)
+        
+        # Если меньше 10 кластеров - слишком мало для маршрутизации!
+        if n_clusters < 10:
+            st.warning(f"⚠️ DBSCAN нашёл только {n_clusters} кластера")
+            
+            # Рассчитываем сколько должно быть в идеале
+            total_points = sum(len(c) for c in clusters_dict.values())
+            ideal_clusters = min(20, total_points // 10)  # Хотя бы 10 точек на кластер
+            
+            st.warning(f"Для {total_points} точек ожидается ~{ideal_clusters} кластеров")
+            st.warning("Использую KMeans вместо DBSCAN")
+            return None  # Вернуть None, чтобы использовать KMeans
+        
+        # Если нашли достаточно кластеров
+        st.success(f"✅ DBSCAN нашёл {n_clusters} кластеров (нормально)")
         
         # Возвращаем только кластеры (без меток)
         return list(clusters_dict.values())
+        
         
     except Exception as e:
         st.error(f"❌ Ошибка DBSCAN: {str(e)[:100]}")
@@ -3427,6 +3475,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
