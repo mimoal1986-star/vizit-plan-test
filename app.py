@@ -1,12 +1,14 @@
-# Картография
-try:
-    import folium
-    from streamlit_folium import folium_static
-    FOLIUM_AVAILABLE = True
-except ImportError:
-    FOLIUM_AVAILABLE = False
-    # st.sidebar.warning("⚠️ Для карты установите: pip install folium streamlit-folium")
+# === ИМПОРТ STREAMLIT (первый!) ===
 import streamlit as st
+
+# === SET_PAGE_CONFIG (ВТОРОЙ, сразу после импорта streamlit!) ===
+st.set_page_config(
+    page_title="Калькулятор плана визитов",
+    page_icon="📊",
+    layout="wide"
+)
+
+# === ТЕПЕРЬ остальные импорты ===
 import pandas as pd
 import numpy as np
 import math
@@ -24,18 +26,22 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# Картография
+try:
+    import folium
+    from streamlit_folium import folium_static
+    FOLIUM_AVAILABLE = True
+except ImportError:
+    FOLIUM_AVAILABLE = False
+
 # ГЕОМЕТРИЯ - всегда используем упрощенную версию
 SCIPY_AVAILABLE = False
 try:
-    # Пробуем импортировать scipy
     import scipy
-    # Проверяем, можем ли мы использовать ConvexHull
     from scipy.spatial import ConvexHull
     SCIPY_AVAILABLE = True
-    st.sidebar.success("✅ SciPy доступен")
-except:
+except ImportError:
     SCIPY_AVAILABLE = False
-    st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
 
 # Для расчета рабочих дней с праздниками
 try:
@@ -43,6 +49,12 @@ try:
     WORKALENDAR_AVAILABLE = True
 except ImportError:
     WORKALENDAR_AVAILABLE = False
+
+# === ТЕПЕРЬ МОЖНО ИСПОЛЬЗОВАТЬ Streamlit команды ===
+if SCIPY_AVAILABLE:
+    st.sidebar.success("✅ SciPy доступен")
+else:
+    st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
 
 # НАСТРОЙКА СТРАНИЦЫ
 st.set_page_config(
@@ -3253,6 +3265,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
