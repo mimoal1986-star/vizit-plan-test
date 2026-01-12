@@ -44,6 +44,14 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
+# МАШИННОЕ ОБУЧЕНИЕ - ДОБАВЬТЕ ЭТО
+SKLEARN_AVAILABLE = False
+try:
+    from sklearn.cluster import KMeans
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
 # Для расчета рабочих дней с праздниками
 try:
     from workalendar.europe import Russia
@@ -51,11 +59,17 @@ try:
 except ImportError:
     WORKALENDAR_AVAILABLE = False
 
-# === ТЕПЕРЬ МОЖНО ИСПОЛЬЗОВАТЬ Streamlit команды ===
+# SciPy доступность
 if SCIPY_AVAILABLE:
     st.sidebar.success("✅ SciPy доступен")
 else:
     st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
+
+# SKLEARN доступность
+if SKLEARN_AVAILABLE:
+    st.sidebar.success("✅ scikit-learn доступен")
+else:
+    st.sidebar.info("ℹ️ Используется географическая сортировка")
 
 # ==============================================
 # ИНИЦИАЛИЗАЦИЯ SESSION STATE
@@ -3259,6 +3273,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
