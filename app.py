@@ -44,10 +44,10 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
-# МАШИННОЕ ОБУЧЕНИЕ - ДОБАВЬТЕ ЭТО
+# МАШИННОЕ ОБУЧЕНИЕ
 SKLEARN_AVAILABLE = False
 try:
-    from sklearn.cluster import KMeans
+    from sklearn.cluster import KMeans,DBSCAN
     SKLEARN_AVAILABLE = True
 except ImportError:
     SKLEARN_AVAILABLE = False
@@ -127,6 +127,16 @@ with st.sidebar:
     coefficients = [stage1, stage2, stage3, stage4]
     
     st.markdown("---")
+
+    # DBSCAN/KMeans
+    st.markdown("---")
+    st.subheader("Алгоритм кластеризации")
+    clustering_method = st.selectbox(
+        "Метод распределения точек",
+        ["Авто (KMeans/сортировка)", "DBSCAN (компактные кластеры)"],
+        help="DBSCAN создает географически компактные кластеры",
+        key="clustering_method"  # ВАЖНО: этот ключ!
+    )
     
     st.info("""
     **Инструкция:**
@@ -734,6 +744,67 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             city_type = "scattered"
         elif max(lat_km, lon_km) / min(lat_km, lon_km) > 3:
             city_type = "linear"
+
+        
+        K = len(working_days)  # Количество рабочих дней
+        
+        # Определяем eps_km по типу города
+        if city_type == "compact":
+            eps_km = 3.0
+        elif city_type == "linear":
+            eps_km = 5.0
+        else:  # scattered
+            eps_km = 8.0
+        
+        # === 4. ВЫБОР И ЗАПУСК КЛАСТЕРИЗАЦИИ ===
+        
+        # Проверяем, выбран ли DBSCAN
+        use_dbscan = False
+        if SKLEARN_AVAILABLE and len(valid_points) > 10:
+            clustering_method = st.session_state.get('clustering_method', 
+                                                   'Авто (KMeans/сортировка)')
+            use_dbscan = (clustering_method == "DBSCAN (компактные кластеры)")
+        
+        # Пробуем DBSCAN если выбран
+        daily_clusters = None
+        if use_dbscan:
+            st.info(f"🔷 **Пробую DBSCAN...** (тип города: {city_type}, ε={eps_km}км)")
+            
+            # Пробуем DBSCAN
+            dbscan_clusters = simple_dbscan_clustering(
+                valid_points, 
+                eps_km=eps_km,
+                min_samples=3
+            )
+            
+            if dbscan_clusters and len(dbscan_clusters) > 0:
+                # DBSCAN сработал!
+                st.success(f"✅ DBSCAN создал {len(dbscan_clusters)} кластеров")
+                
+                # Балансируем кластеры под количество дней
+                if len(dbscan_clusters) <= K:
+                    # Кластеров меньше или равно дням - балансируем
+                    daily_clusters = balance_clusters_simple(dbscan_clusters, K)
+                else:
+                    # Кластеров больше чем дней - используем первые K
+                    daily_clusters = dbscan_clusters[:K]
+                
+                st.info(f"🔷 **Используется:** DBSCAN кластеризация")
+            else:
+                # DBSCAN не сработал
+                st.warning("⚠️ DBSCAN не создал кластеры, использую KMeans")
+                use_dbscan = False
+        
+        # Если DBSCAN не использовался или не сработал, используем старый код
+        if not daily_clusters:
+            # === 4. КЛАСТЕРИЗАЦИЯ (ВАШ СУЩЕСТВУЮЩИЙ КОД) ===
+            # ВСТАВЬТЕ ВЕСЬ ВАШ СУЩЕСТВУЮЩИЙ КОД KMeans/сортировки ЗДЕСЬ
+            # НЕ МЕНЯЙТЕ ЕГО!
+            
+            # ... ваш существующий try-except блок с KMeans ...
+            
+            st.info(f"🔧 **Используется:** {'KMeans' if SKLEARN_AVAILABLE else 'Географическая сортировка'}")
+            
         
         # === 4. КЛАСТЕРИЗАЦИЯ ===
         
@@ -897,6 +968,76 @@ def balance_clusters_simple(clusters, target_k):
     
     return balanced
 
+
+def simple_dbscan_clustering(points, eps_km=5.0, min_samples=3):
+    """
+    Простая DBSCAN кластеризация для тестирования
+    Возвращает список кластеров или None при ошибке
+    """
+    try:
+        if not points or len(points) < min_samples:
+            return None
+        
+        import numpy as np
+        from sklearn.cluster import DBSCAN
+        
+        # Конвертируем км в градусы (примерно)
+        # 1° ≈ 111 км
+        eps_deg = eps_km / 111.0
+        
+        # Подготавливаем координаты
+        coords = []
+        valid_points_list = []
+        for point in points:
+            try:
+                lat = float(point['Широта'])
+                lon = float(point['Долгота'])
+                coords.append([lat, lon])
+                valid_points_list.append(point)
+            except (ValueError, TypeError):
+                continue
+        
+        if len(coords) < min_samples:
+            return None
+        
+        coords_array = np.array(coords)
+        
+        # Запускаем DBSCAN
+        dbscan = DBSCAN(
+            eps=eps_deg,
+            min_samples=min_samples,
+            metric='euclidean',
+            n_jobs=-1
+        )
+        
+        labels = dbscan.fit_predict(coords_array)
+        
+        # Группируем точки по кластерам
+        clusters_dict = {}
+        for point, label in zip(valid_points_list, labels):
+            if label not in clusters_dict:
+                clusters_dict[label] = []
+            clusters_dict[label].append(point)
+        
+        # Удаляем шум (-1)
+        if -1 in clusters_dict:
+            noise_count = len(clusters_dict[-1])
+            if noise_count > 0:
+                st.info(f"DBSCAN: найдено {len(clusters_dict)-1} кластеров, "
+                       f"{noise_count} шумовых точек")
+            del clusters_dict[-1]
+        else:
+            st.info(f"DBSCAN: найдено {len(clusters_dict)} кластеров")
+        
+        if not clusters_dict:
+            return None
+        
+        # Возвращаем только кластеры (без меток)
+        return list(clusters_dict.values())
+        
+    except Exception as e:
+        st.error(f"❌ Ошибка DBSCAN: {str(e)[:100]}")
+        return None
 
 def simple_geographic_distribution(points, working_days, auditor_id):
     """Простое географическое распределение"""
@@ -3286,6 +3427,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
