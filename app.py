@@ -805,22 +805,24 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         # === 4. КЛАСТЕРИЗАЦИЯ ===
         
         #  показываем КАКОЙ метод будем использовать
-        if SKLEARN_AVAILABLE and len(valid_points) > 1:
-            st.info(f"🔧 **Метод расчета:** KMeans кластеризация")
-            st.caption(f"Точек: {len(valid_points)}, рабочих дней: {K}")
-        else:
-            st.info(f"🔧 **Метод расчета:** Географическая сортировка")
-            reason = ("scikit-learn не установлен" if not SKLEARN_AVAILABLE 
-                     else "мало точек" if len(valid_points) <= 1 
-                     else "неизвестная причина")
-            st.caption(f"Причина: {reason}")
-
-        #  запускаем расчет по выбранному методу
-        try:
-            from sklearn.cluster import KMeans
-            
-            # Подготовка координат
-            coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
+        if not dbscan_success:
+            # ТОЛЬКО если DBSCAN не сработал - показываем информацию о KMeans
+            if SKLEARN_AVAILABLE and len(valid_points) > 1:
+                st.info(f"🔧 **Метод расчета:** KMeans кластеризация")
+                st.caption(f"Точек: {len(valid_points)}, рабочих дней: {K}")
+            else:
+                st.info(f"🔧 **Метод расчета:** Географическая сортировка")
+                reason = ("scikit-learn не установлен" if not SKLEARN_AVAILABLE 
+                         else "мало точек" if len(valid_points) <= 1 
+                         else "неизвестная причина")
+                st.caption(f"Причина: {reason}")
+        
+            # Запускаем расчет по выбранному методу
+            if SKLEARN_AVAILABLE and len(valid_points) > 1:
+                try:
+                    # KMeans уже импортирован в начале файла, используем его
+                    # Подготовка координат
+                    coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
             
             # Масштабирование для разных типов городов
             if city_type == "linear":
@@ -860,6 +862,7 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         except Exception as e:
             st.error(f"❌ Ошибка кластеризации: {str(e)}")
             return simple_geographic_distribution(valid_points, working_days, auditor_id)
+        
         
         # === 5. БАЛАНСИРОВКА КЛАСТЕРОВ ===
         # Перераспределяем точки если кластеры сильно различаются по размеру
@@ -3445,6 +3448,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
