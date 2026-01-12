@@ -1,5 +1,4 @@
 # === ИМПОРТЫ (без Streamlit команд!) ===
-from sklearn.cluster import KMeans
 import pandas as pd
 import numpy as np
 import math
@@ -723,9 +722,26 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             city_type = "linear"
         
         # === 4. КЛАСТЕРИЗАЦИЯ ===
+        try:
+            from sklearn.cluster import KMeans
             
             # Подготовка координат
             coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
+            
+            # Масштабирование для разных типов городов
+            if city_type == "linear":
+                # Для вытянутых городов
+                if lon_range > lat_range * 2:
+                    # Вытянут по долготе
+                    scaled_coords = coords * [1.0, 2.0]
+                else:
+                    # Вытянут по широте
+                    scaled_coords = coords * [2.0, 1.0]
+            else:
+                # Нормализация с учетом широты
+                lon_scale = math.cos(math.radians(avg_lat))
+                scaled_coords = coords.copy()
+                scaled_coords[:, 1] *= lon_scale
             
             # Кластеризация KMeans
             kmeans = KMeans(
@@ -741,6 +757,15 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
             for point, label in zip(valid_points, labels):
                 if 0 <= label < K:
                     daily_clusters[label].append(point)
+            
+        except ImportError:
+            # Если нет sklearn, используем простую географическую сортировку
+            st.warning("⚠️ Установите scikit-learn для лучшей кластеризации")
+            return simple_geographic_distribution(valid_points, working_days, auditor_id)
+        
+        except Exception as e:
+            st.error(f"❌ Ошибка кластеризации: {str(e)}")
+            return simple_geographic_distribution(valid_points, working_days, auditor_id)
         
         # === 5. БАЛАНСИРОВКА КЛАСТЕРОВ ===
         # Перераспределяем точки если кластеры сильно различаются по размеру
@@ -845,6 +870,58 @@ def balance_clusters_simple(clusters, target_k):
     
     return balanced
 
+
+def simple_geographic_distribution(points, working_days, auditor_id):
+    """Простое географическое распределение"""
+    if not points or not working_days:
+        return []
+    
+    K = len(working_days)
+    
+    # Сортируем точки
+    sorted_points = sorted(points, key=lambda p: (-p['Широта'], p['Долгота']))
+    
+    # Делим на части
+    daily_clusters = []
+    base_size = len(sorted_points) // K
+    remainder = len(sorted_points) % K
+    
+    start_idx = 0
+    for day_idx in range(K):
+        size = base_size + (1 if day_idx < remainder else 0)
+        end_idx = start_idx + size
+        
+        if start_idx < len(sorted_points):
+            daily_clusters.append(sorted_points[start_idx:end_idx])
+            start_idx = end_idx
+        else:
+            daily_clusters.append([])
+    
+    # Строим маршруты
+    routes = []
+    for day_idx, (day_date, cluster_points) in enumerate(zip(working_days, daily_clusters)):
+        if not cluster_points:
+            continue
+        
+        if isinstance(day_date, date) and not isinstance(day_date, datetime):
+            visit_datetime = datetime.combine(day_date, datetime.min.time())
+        else:
+            visit_datetime = day_date
+        
+        for point in cluster_points:
+            routes.append({
+                'ID_Точки': point['ID_Точки'],
+                'Дата': visit_datetime,
+                'День_недели': visit_datetime.weekday(),
+                'Аудитор': auditor_id,
+                'Широта': point['Широта'],
+                'Долгота': point['Долгота'],
+                'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
+                'Адрес': point.get('Адрес', ''),
+                'Тип': point.get('Тип', 'Неизвестно')
+            })
+    
+    return routes
     
 # ==============================================
 # ФУНКЦИИ ДЛЯ СОЗДАНИЯ ВЫХОДНОЙ ТАБЛИЦЫ
@@ -3182,11 +3259,6 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
-
-
-
-
-
 
 
 
