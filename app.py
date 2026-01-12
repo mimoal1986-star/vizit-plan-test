@@ -750,7 +750,7 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         
         # Определяем eps_km по типу города
         if city_type == "compact":
-            eps_km = 3.0
+            eps_km = 1.0
         elif city_type == "linear":
             eps_km = 5.0
         else:  # scattered
@@ -3475,6 +3475,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
