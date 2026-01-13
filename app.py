@@ -1629,7 +1629,115 @@ def recursive_geographic_split_by_sizes(points_df, target_sizes, depth=0):
     
     # Возвращаем отсортированные кластеры
     return [item['cluster'] for item in cluster_data]
+
+def create_weekly_geographic_clusters(points_assignment_df, points_df, year, quarter, coefficients):
+    """
+    Создает недельные географические кластеры для каждого аудитора.
+    Использует коэффициенты нагрузки и географическое деление.
+    """
     
+    results = []
+    auditors = points_assignment_df['Аудитор'].unique()
+    weeks_info = get_weeks_in_quarter(year, quarter)
+    
+    if not weeks_info:
+        st.warning("⚠️ Не удалось получить недели квартала")
+        return pd.DataFrame()
+    
+    for auditor in auditors:
+        # 1. Находим точки аудитора
+        auditor_point_ids = points_assignment_df[
+            points_assignment_df['Аудитор'] == auditor
+        ]['ID_Точки'].tolist()
+        
+        if not auditor_point_ids:
+            continue
+        
+        auditor_points = points_df[
+            points_df['ID_Точки'].isin(auditor_point_ids)
+        ].copy()
+        
+        if auditor_points.empty:
+            st.warning(f"⚠️ Аудитор {auditor}: не найдены точки с координатами")
+            continue
+        
+        # 2. Рассчитываем целевые размеры недель
+        total_points = len(auditor_points)
+        weekly_targets = calculate_weekly_targets(
+            total_points, year, quarter, coefficients
+        )
+        
+        # 3. СИНХРОНИЗИРУЕМ: если размеры не совпадают, берем минимум
+        n_weeks_to_use = min(len(weekly_targets), len(weeks_info))
+        
+        if n_weeks_to_use == 0:
+            st.warning(f"⚠️ Аудитор {auditor}: нет недель для распределения")
+            continue
+            
+        if len(weekly_targets) != len(weeks_info):
+            st.warning(f"⚠️ Аудитор {auditor}: недель расчёта {len(weekly_targets)} != календарных {len(weeks_info)}. "
+                      f"Используем {n_weeks_to_use} недель.")
+        
+        # Берём только первые n_weeks_to_use недель
+        weekly_targets = weekly_targets[:n_weeks_to_use]
+        weeks_to_use = weeks_info[:n_weeks_to_use]
+        
+        # 4. Делим точки географически
+        clusters = recursive_geographic_split_by_sizes(
+            auditor_points, weekly_targets
+        )
+        
+        # 5. ПРОВЕРЯЕМ и выравниваем количество кластеров
+        if len(clusters) != len(weekly_targets):
+            # Если кластеров больше - обрезаем
+            if len(clusters) > len(weekly_targets):
+                clusters = clusters[:len(weekly_targets)]
+            # Если меньше - добавляем пустые
+            else:
+                while len(clusters) < len(weekly_targets):
+                    clusters.append(pd.DataFrame(columns=auditor_points.columns))
+        
+        # 6. Назначаем кластеры неделям
+        for week_index in range(len(weeks_to_use)):
+            cluster = clusters[week_index] if week_index < len(clusters) else pd.DataFrame()
+            week_info = weeks_to_use[week_index]
+            
+            # Даже если кластер пустой - создаём запись (неделя без точек)
+            if cluster.empty:
+                # Пустая неделя - создаём хотя бы одну "фантомную" запись для структуры
+                # или просто пропускаем? Пока пропускаем, но логируем
+                continue
+            
+            # Для каждой точки в кластере
+            for _, point in cluster.iterrows():
+                results.append({
+                    'ID_Точки': point['ID_Точки'],
+                    'Аудитор': auditor,
+                    'Неделя': week_info['iso_week_number'],
+                    'Кластер_номер': week_index,
+                    'Дата_начала_недели': week_info['start_date'],
+                    'Дата_окончания_недели': week_info['end_date'],
+                    'План_посещений': 1
+                })
+    
+    # Создаём DataFrame
+    if not results:
+        st.warning("⚠️ Не удалось создать ни одного кластера")
+        return pd.DataFrame()
+    
+    result_df = pd.DataFrame(results)
+    
+    # Проверка распределения
+    total_assigned = len(result_df)
+    total_expected = len(points_assignment_df)
+    
+    if total_assigned != total_expected:
+        st.warning(f"⚠️ Распределено {total_assigned} из {total_expected} точек "
+                  f"(разница: {total_expected - total_assigned})")
+        # Можно добавить логику для поиска потерянных точек
+    
+    return result_df
+
 # ==============================================
 # ФУНКЦИИ ДЛЯ РАСПРЕДЕЛЕНИЯ ПО АУДИТОРАМ (ГЕОГРАФИЧЕСКОЕ РАЗДЕЛЕНИЕ)
 # ==============================================
@@ -3481,6 +3589,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
