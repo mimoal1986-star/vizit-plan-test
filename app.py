@@ -51,11 +51,11 @@ try:
 except ImportError:
     WORKALENDAR_AVAILABLE = False
 
-# === ТЕПЕРЬ МОЖНО ИСПОЛЬЗОВАТЬ Streamlit команды ===
-if SCIPY_AVAILABLE:
-    st.sidebar.success("✅ SciPy доступен")
-else:
-    st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
+# # === ТЕПЕРЬ МОЖНО ИСПОЛЬЗОВАТЬ Streamlit команды ===
+# if SCIPY_AVAILABLE:
+# st.sidebar.success("✅ SciPy доступен")
+# else:
+# st.sidebar.info("ℹ️ Используется упрощенная генерация полигонов")
 
 # ==============================================
 # ИНИЦИАЛИЗАЦИЯ SESSION STATE
@@ -662,84 +662,84 @@ def get_working_days_for_quarter(year, quarter):
         
         return working_days
 
-def simple_cluster_points(points, n_clusters):
-    """
-    Простая кластеризация без sklearn
-    """
-    if not points or n_clusters <= 0:
-        return [[] for _ in range(n_clusters)] if n_clusters > 0 else []
+# def simple_cluster_points(points, n_clusters):
+#     """
+#     Простая кластеризация без sklearn
+#     """
+#     if not points or n_clusters <= 0:
+#         return [[] for _ in range(n_clusters)] if n_clusters > 0 else []
     
-    if len(points) <= n_clusters:
-        # Каждая точка в своей группе
-        clusters = [[p] for p in points]
-        # Добавляем пустые группы если нужно
-        while len(clusters) < n_clusters:
-            clusters.append([])
-        return clusters
+#     if len(points) <= n_clusters:
+#         # Каждая точка в своей группе
+#         clusters = [[p] for p in points]
+#         # Добавляем пустые группы если нужно
+#         while len(clusters) < n_clusters:
+#             clusters.append([])
+#         return clusters
     
-    # Выбираем начальные центры
-    centers = []
+#     # Выбираем начальные центры
+#     centers = []
     
-    # Первый центр - первая точка
-    if points:
-        centers.append(points[0])
+#     # Первый центр - первая точка
+#     if points:
+#         centers.append(points[0])
     
-    # Остальные центры - самые удаленные
-    for _ in range(1, min(n_clusters, len(points))):
-        max_min_distance = -1
-        best_point = None
+#     # Остальные центры - самые удаленные
+#     for _ in range(1, min(n_clusters, len(points))):
+#         max_min_distance = -1
+#         best_point = None
         
-        for point in points:
-            if point in centers:
-                continue
+#         for point in points:
+#             if point in centers:
+#                 continue
             
-            # Минимальное расстояние до существующих центров
-            min_dist = float('inf')
-            for center in centers:
-                dist = WeeklyRouteOptimizer.calculate_distance(
-                    point['Широта'], point['Долгота'],
-                    center['Широта'], center['Долгота']
-                )
-                min_dist = min(min_dist, dist)
+#             # Минимальное расстояние до существующих центров
+#             min_dist = float('inf')
+#             for center in centers:
+#                 dist = WeeklyRouteOptimizer.calculate_distance(
+#                     point['Широта'], point['Долгота'],
+#                     center['Широта'], center['Долгота']
+#                 )
+#                 min_dist = min(min_dist, dist)
             
-            if min_dist > max_min_distance:
-                max_min_distance = min_dist
-                best_point = point
+#             if min_dist > max_min_distance:
+#                 max_min_distance = min_dist
+#                 best_point = point
         
-        if best_point:
-            centers.append(best_point)
-        else:
-            # Если не нашли, берем любую неиспользованную
-            for point in points:
-                if point not in centers:
-                    centers.append(point)
-                    break
+#         if best_point:
+#             centers.append(best_point)
+#         else:
+#             # Если не нашли, берем любую неиспользованную
+#             for point in points:
+#                 if point not in centers:
+#                     centers.append(point)
+#                     break
     
-    # Если не набрали достаточно центров
-    while len(centers) < n_clusters:
-        centers.append(points[0])  # дублируем первую точку
+#     # Если не набрали достаточно центров
+#     while len(centers) < n_clusters:
+#         centers.append(points[0])  # дублируем первую точку
     
-    # Назначаем точки ближайшим центрам
-    clusters = [[] for _ in range(n_clusters)]
+#     # Назначаем точки ближайшим центрам
+#     clusters = [[] for _ in range(n_clusters)]
     
-    for point in points:
-        # Находим ближайший центр
-        min_dist = float('inf')
-        nearest_idx = 0
+#     for point in points:
+#         # Находим ближайший центр
+#         min_dist = float('inf')
+#         nearest_idx = 0
         
-        for i, center in enumerate(centers):
-            dist = WeeklyRouteOptimizer.calculate_distance(
-                point['Широта'], point['Долгота'],
-                center['Широта'], center['Долгота']
-            )
-            if dist < min_dist:
-                min_dist = dist
-                nearest_idx = i
+#         for i, center in enumerate(centers):
+#             dist = WeeklyRouteOptimizer.calculate_distance(
+#                 point['Широта'], point['Долгота'],
+#                 center['Широта'], center['Долгота']
+#             )
+#             if dist < min_dist:
+#                 min_dist = dist
+#                 nearest_idx = i
         
-        if 0 <= nearest_idx < n_clusters:
-            clusters[nearest_idx].append(point)
+#         if 0 <= nearest_idx < n_clusters:
+#             clusters[nearest_idx].append(point)
     
-    return clusters
+#     return clusters
 
 def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
     """
@@ -797,55 +797,55 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         elif max(lat_km, lon_km) / min(lat_km, lon_km) > 3:
             city_type = "linear"
         
-        # === 4. КЛАСТЕРИЗАЦИЯ ===
-        try:
-            from sklearn.cluster import KMeans
+        # # === 4. КЛАСТЕРИЗАЦИЯ ===
+        # try:
+        #     from sklearn.cluster import KMeans
             
-            # Подготовка координат
-            coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
+        #     # Подготовка координат
+        #     coords = np.array([[p['Широта'], p['Долгота']] for p in valid_points])
             
-            # Масштабирование для разных типов городов
-            if city_type == "linear":
-                # Для вытянутых городов
-                if lon_range > lat_range * 2:
-                    # Вытянут по долготе
-                    scaled_coords = coords * [1.0, 2.0]
-                else:
-                    # Вытянут по широте
-                    scaled_coords = coords * [2.0, 1.0]
-            else:
-                # Нормализация с учетом широты
-                lon_scale = math.cos(math.radians(avg_lat))
-                scaled_coords = coords.copy()
-                scaled_coords[:, 1] *= lon_scale
+        #     # Масштабирование для разных типов городов
+        #     if city_type == "linear":
+        #         # Для вытянутых городов
+        #         if lon_range > lat_range * 2:
+        #             # Вытянут по долготе
+        #             scaled_coords = coords * [1.0, 2.0]
+        #         else:
+        #             # Вытянут по широте
+        #             scaled_coords = coords * [2.0, 1.0]
+        #     else:
+        #         # Нормализация с учетом широты
+        #         lon_scale = math.cos(math.radians(avg_lat))
+        #         scaled_coords = coords.copy()
+        #         scaled_coords[:, 1] *= lon_scale
             
-            # Кластеризация KMeans
-            kmeans = KMeans(
-                n_clusters=K,
-                init='k-means++',
-                n_init=10,
-                random_state=42
-            )
-            labels = kmeans.fit_predict(scaled_coords)
+        #     # Кластеризация KMeans
+        #     kmeans = KMeans(
+        #         n_clusters=K,
+        #         init='k-means++',
+        #         n_init=10,
+        #         random_state=42
+        #     )
+        #     labels = kmeans.fit_predict(scaled_coords)
             
-            # Группировка по кластерам
-            daily_clusters = [[] for _ in range(K)]
-            for point, label in zip(valid_points, labels):
-                if 0 <= label < K:
-                    daily_clusters[label].append(point)
+        #     # Группировка по кластерам
+        #     daily_clusters = [[] for _ in range(K)]
+        #     for point, label in zip(valid_points, labels):
+        #         if 0 <= label < K:
+        #             daily_clusters[label].append(point)
             
-        except ImportError:
-            # Если нет sklearn, используем простую географическую сортировку
-            st.warning("⚠️ Установите scikit-learn для лучшей кластеризации")
-            return simple_geographic_distribution(valid_points, working_days, auditor_id)
+        # except ImportError:
+        #     # Если нет sklearn, используем простую географическую сортировку
+        #     st.warning("⚠️ Установите scikit-learn для лучшей кластеризации")
+        #     return simple_geographic_distribution(valid_points, working_days, auditor_id)
         
-        except Exception as e:
-            st.error(f"❌ Ошибка кластеризации: {str(e)}")
-            return simple_geographic_distribution(valid_points, working_days, auditor_id)
+        # except Exception as e:
+        #     st.error(f"❌ Ошибка кластеризации: {str(e)}")
+        #     return simple_geographic_distribution(valid_points, working_days, auditor_id)
         
-        # === 5. БАЛАНСИРОВКА КЛАСТЕРОВ ===
-        # Перераспределяем точки если кластеры сильно различаются по размеру
-        balanced_clusters = balance_clusters_simple(daily_clusters, K)
+        # # === 5. БАЛАНСИРОВКА КЛАСТЕРОВ ===
+        # # Перераспределяем точки если кластеры сильно различаются по размеру
+        # balanced_clusters = balance_clusters_simple(daily_clusters, K)
         
         # === 6. ПОСТРОЕНИЕ МАРШРУТОВ ===
         routes = []
@@ -897,107 +897,107 @@ def create_daily_routes_for_auditor(auditor_points, working_days, auditor_id):
         return []
 
 
-def simple_distribute_points(points, working_days, auditor_id):
-    """Простое распределение точек по дням"""
-    routes = []
+# def simple_distribute_points(points, working_days, auditor_id):
+#     """Простое распределение точек по дням"""
+#     routes = []
     
-    for i, point in enumerate(points):
-        if i >= len(working_days):
-            break
+#     for i, point in enumerate(points):
+#         if i >= len(working_days):
+#             break
         
-        day_date = working_days[i]
-        if isinstance(day_date, date) and not isinstance(day_date, datetime):
-            visit_datetime = datetime.combine(day_date, datetime.min.time())
-        else:
-            visit_datetime = day_date
+#         day_date = working_days[i]
+#         if isinstance(day_date, date) and not isinstance(day_date, datetime):
+#             visit_datetime = datetime.combine(day_date, datetime.min.time())
+#         else:
+#             visit_datetime = day_date
         
-        routes.append({
-            'ID_Точки': point['ID_Точки'],
-            'Дата': visit_datetime,
-            'День_недели': visit_datetime.weekday(),
-            'Аудитор': auditor_id,
-            'Широта': point['Широта'],
-            'Долгота': point['Долгота'],
-            'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
-            'Адрес': point.get('Адрес', ''),
-            'Тип': point.get('Тип', 'Неизвестно')
-        })
+#         routes.append({
+#             'ID_Точки': point['ID_Точки'],
+#             'Дата': visit_datetime,
+#             'День_недели': visit_datetime.weekday(),
+#             'Аудитор': auditor_id,
+#             'Широта': point['Широта'],
+#             'Долгота': point['Долгота'],
+#             'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
+#             'Адрес': point.get('Адрес', ''),
+#             'Тип': point.get('Тип', 'Неизвестно')
+#         })
     
-    return routes
+#     return routes
 
 
-def balance_clusters_simple(clusters, target_k):
-    """Простая балансировка кластеров"""
-    # Собираем все точки
-    all_points = []
-    for cluster in clusters:
-        all_points.extend(cluster)
+# def balance_clusters_simple(clusters, target_k):
+#     """Простая балансировка кластеров"""
+#     # Собираем все точки
+#     all_points = []
+#     for cluster in clusters:
+#         all_points.extend(cluster)
     
-    if len(all_points) == 0:
-        return [[] for _ in range(target_k)]
+#     if len(all_points) == 0:
+#         return [[] for _ in range(target_k)]
     
-    # Сортируем по географии
-    sorted_points = sorted(all_points, key=lambda p: (-p['Широта'], p['Долгота']))
+#     # Сортируем по географии
+#     sorted_points = sorted(all_points, key=lambda p: (-p['Широта'], p['Долгота']))
     
-    # Распределяем равномерно
-    balanced = [[] for _ in range(target_k)]
-    for i, point in enumerate(sorted_points):
-        balanced[i % target_k].append(point)
+#     # Распределяем равномерно
+#     balanced = [[] for _ in range(target_k)]
+#     for i, point in enumerate(sorted_points):
+#         balanced[i % target_k].append(point)
     
-    return balanced
+#     return balanced
 
 
-def simple_geographic_distribution(points, working_days, auditor_id):
-    """Простое географическое распределение"""
-    if not points or not working_days:
-        return []
+# def simple_geographic_distribution(points, working_days, auditor_id):
+#     """Простое географическое распределение"""
+#     if not points or not working_days:
+#         return []
     
-    K = len(working_days)
+#     K = len(working_days)
     
-    # Сортируем точки
-    sorted_points = sorted(points, key=lambda p: (-p['Широта'], p['Долгота']))
+#     # Сортируем точки
+#     sorted_points = sorted(points, key=lambda p: (-p['Широта'], p['Долгота']))
     
-    # Делим на части
-    daily_clusters = []
-    base_size = len(sorted_points) // K
-    remainder = len(sorted_points) % K
+#     # Делим на части
+#     daily_clusters = []
+#     base_size = len(sorted_points) // K
+#     remainder = len(sorted_points) % K
     
-    start_idx = 0
-    for day_idx in range(K):
-        size = base_size + (1 if day_idx < remainder else 0)
-        end_idx = start_idx + size
+#     start_idx = 0
+#     for day_idx in range(K):
+#         size = base_size + (1 if day_idx < remainder else 0)
+#         end_idx = start_idx + size
         
-        if start_idx < len(sorted_points):
-            daily_clusters.append(sorted_points[start_idx:end_idx])
-            start_idx = end_idx
-        else:
-            daily_clusters.append([])
+#         if start_idx < len(sorted_points):
+#             daily_clusters.append(sorted_points[start_idx:end_idx])
+#             start_idx = end_idx
+#         else:
+#             daily_clusters.append([])
     
-    # Строим маршруты
-    routes = []
-    for day_idx, (day_date, cluster_points) in enumerate(zip(working_days, daily_clusters)):
-        if not cluster_points:
-            continue
+#     # Строим маршруты
+#     routes = []
+#     for day_idx, (day_date, cluster_points) in enumerate(zip(working_days, daily_clusters)):
+#         if not cluster_points:
+#             continue
         
-        if isinstance(day_date, date) and not isinstance(day_date, datetime):
-            visit_datetime = datetime.combine(day_date, datetime.min.time())
-        else:
-            visit_datetime = day_date
+#         if isinstance(day_date, date) and not isinstance(day_date, datetime):
+#             visit_datetime = datetime.combine(day_date, datetime.min.time())
+#         else:
+#             visit_datetime = day_date
         
-        for point in cluster_points:
-            routes.append({
-                'ID_Точки': point['ID_Точки'],
-                'Дата': visit_datetime,
-                'День_недели': visit_datetime.weekday(),
-                'Аудитор': auditor_id,
-                'Широта': point['Широта'],
-                'Долгота': point['Долгота'],
-                'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
-                'Адрес': point.get('Адрес', ''),
-                'Тип': point.get('Тип', 'Неизвестно')
-            })
+#         for point in cluster_points:
+#             routes.append({
+#                 'ID_Точки': point['ID_Точки'],
+#                 'Дата': visit_datetime,
+#                 'День_недели': visit_datetime.weekday(),
+#                 'Аудитор': auditor_id,
+#                 'Широта': point['Широта'],
+#                 'Долгота': point['Долгота'],
+#                 'Название_Точки': point.get('Название_Точки', point['ID_Точки']),
+#                 'Адрес': point.get('Адрес', ''),
+#                 'Тип': point.get('Тип', 'Неизвестно')
+#             })
     
-    return routes
+#     return routes
     
 # ==============================================
 # ФУНКЦИИ ДЛЯ СОЗДАНИЯ ВЫХОДНОЙ ТАБЛИЦЫ
@@ -3789,6 +3789,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
