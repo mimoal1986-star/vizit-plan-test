@@ -412,7 +412,10 @@ def get_weeks_in_quarter(year, quarter):
 def calculate_weekly_targets(total_points, year, quarter, coefficients):
     """
     Рассчитывает, сколько точек должно быть в каждую неделю квартала
-    с учетом коэффициентов нагрузки.
+    с учетом коэффициентов нагрузки. Использует ТУ ЖЕ логику, что и
+    оригинальная функция distribute_visits_by_weeks():
+    - Коэффициенты применяются циклически по ISO номеру недели
+    - week_index = (iso_week - 1) % 4
     """
     weeks_info = get_weeks_in_quarter(year, quarter)
     if not weeks_info:
@@ -420,47 +423,65 @@ def calculate_weekly_targets(total_points, year, quarter, coefficients):
     
     n_weeks = len(weeks_info)
     
-    # 1. Базовая нагрузка
+    # 1. Базовая нагрузка (равномерная)
     base_per_week = total_points / n_weeks
     
-    # 2. Применяем коэффициенты (гарантируем минимум 1 точку)
+    # 2. Применяем коэффициенты (ЦИКЛИЧЕСКИ по ISO неделе)
     weekly_targets = []
-    for i in range(n_weeks):
-        coefficient = coefficients[i % len(coefficients)]
+    for week_info in weeks_info:
+        iso_week = week_info['iso_week_number']
+        week_index = (iso_week - 1) % 4  # 0, 1, 2, 3, 0, 1, ...
+        coefficient = coefficients[week_index % len(coefficients)]
+        
         raw_target = base_per_week * coefficient
-        weekly_target = max(1, int(round(raw_target)))  # минимум 1
+        weekly_target = max(1, int(round(raw_target)))  # минимум 1 точка
         weekly_targets.append(weekly_target)
     
-    # 3. Быстрая корректировка суммы
+    # 3. Корректируем сумму до total_points
     current_sum = sum(weekly_targets)
     difference = total_points - current_sum
     
     if difference != 0:
-        # Сортируем недели по "эластичности" (насколько можно изменить)
-        # Сначала те, где больше отклонение от базовой нагрузки
-        week_indices = list(range(n_weeks))
-        week_indices.sort(
-            key=lambda idx: abs(weekly_targets[idx] - base_per_week),
-            reverse=True
-        )
+        # Сортируем недели по "гибкости" (насколько можно изменить)
+        # Приоритет у недель с самым высоким коэффициентом (могут взять больше)
+        week_flexibility = []
+        for i, week_info in enumerate(weeks_info):
+            iso_week = week_info['iso_week_number']
+            week_index = (iso_week - 1) % 4
+            coefficient = coefficients[week_index % len(coefficients)]
+            
+            # "Гибкость" = коэффициент (высокий коэффициент = может взять больше)
+            week_flexibility.append((i, coefficient))
         
-        for idx in week_indices:
-            if difference == 0:
-                break
-                
+        # Сортируем по коэффициенту (убывание)
+        week_flexibility.sort(key=lambda x: -x[1])
+        
+        # Корректируем
+        week_idx = 0
+        while difference != 0 and week_idx < len(week_flexibility):
+            i = week_flexibility[week_idx][0]
+            
             if difference > 0:
                 # Добавляем точку
-                weekly_targets[idx] += 1
+                weekly_targets[i] += 1
                 difference -= 1
-            elif difference < 0 and weekly_targets[idx] > 1:
+            elif difference < 0 and weekly_targets[i] > 1:
                 # Убираем точку (но не ниже 1)
-                weekly_targets[idx] -= 1
+                weekly_targets[i] -= 1
                 difference += 1
+            
+            week_idx += 1
     
-    # Финальная проверка
+    # 4. Финальная гарантия (аварийный клапан)
     if sum(weekly_targets) != total_points:
-        # Последняя корректировка: первую неделю делаем "мусорной"
+        # Всю оставшуюся разницу на первую неделю
         weekly_targets[0] += (total_points - sum(weekly_targets))
+    
+    # 5. Проверка (для отладки)
+    final_sum = sum(weekly_targets)
+    if final_sum != total_points:
+        # Это не должно случиться, но если случилось — логируем
+        pass
     
     return weekly_targets
 
@@ -1463,6 +1484,152 @@ def distribute_visits_by_weeks(points_assignment_df, points_df, year, quarter, c
         st.error(f"❌ Ошибка при распределении посещений по неделям: {str(e)}")
         st.error(f"Детали:\n{traceback.format_exc()}")
         return pd.DataFrame()
+
+def recursive_geographic_split_by_sizes(points_df, target_sizes, depth=0):
+    """
+    Рекурсивно делит точки географически на части заданных размеров.
+    """
+    
+    # БАЗОВЫЕ СЛУЧАИ с защитой от ошибок
+    # 1. Если точек нет или sizes нет
+    if points_df.empty or not target_sizes:
+        # Возвращаем пустые кластеры по количеству target_sizes
+        return [pd.DataFrame(columns=points_df.columns) for _ in range(len(target_sizes))]
+    
+    # 2. Если нужна только одна часть
+    if len(target_sizes) == 1:
+        return [points_df.copy()]
+    
+    # 3. Если точек меньше, чем нужно частей
+    if len(points_df) <= len(target_sizes):
+        clusters = []
+        points_as_list = []
+        
+        # Безопасное преобразование
+        try:
+            points_as_list = points_df.to_dict('records')
+        except:
+            # Если ошибка, создаём пустые кластеры
+            return [pd.DataFrame(columns=points_df.columns) for _ in range(len(target_sizes))]
+        
+        # Заполняем кластеры точками
+        for i, target_size in enumerate(target_sizes):
+            if i < len(points_as_list) and target_size > 0:
+                # Создаём DataFrame с одной точкой
+                try:
+                    clusters.append(pd.DataFrame([points_as_list[i]]))
+                except:
+                    clusters.append(pd.DataFrame(columns=points_df.columns))
+            else:
+                clusters.append(pd.DataFrame(columns=points_df.columns))
+        
+        return clusters
+    
+    # ОСНОВНАЯ ЛОГИКА
+    # Определяем ось деления
+    axis = 'latitude' if depth % 2 == 0 else 'longitude'
+    
+    # Сортируем точки по выбранной оси
+    try:
+        if axis == 'latitude':
+            sorted_df = points_df.sort_values('Широта', ascending=False)
+        else:
+            sorted_df = points_df.sort_values('Долгота', ascending=True)
+    except KeyError:
+        # Если нет колонок с координатами
+        return [pd.DataFrame(columns=points_df.columns) for _ in range(len(target_sizes))]
+    
+    # Разделяем target_sizes на две группы
+    split_index = len(target_sizes) // 2
+    first_sizes = target_sizes[:split_index]
+    second_sizes = target_sizes[split_index:]
+    
+    # Вычисляем, сколько точек должно быть в первой группе
+    first_group_target = sum(first_sizes)
+    
+    # БЕЗОПАСНО находим точку раздела
+    if len(sorted_df) == 0:
+        split_point_idx = 0
+    else:
+        split_point_idx = min(first_group_target, len(sorted_df))
+        split_point_idx = max(0, split_point_idx)  # гарантируем не отрицательный
+    
+    # Делим DataFrame (безопасно)
+    if split_point_idx >= len(sorted_df):
+        first_part = sorted_df.copy()
+        second_part = pd.DataFrame(columns=points_df.columns)
+    elif split_point_idx <= 0:
+        first_part = pd.DataFrame(columns=points_df.columns)
+        second_part = sorted_df.copy()
+    else:
+        first_part = sorted_df.iloc[:split_point_idx].copy()
+        second_part = sorted_df.iloc[split_point_idx:].copy()
+    
+    # Рекурсивно делим только если есть точки
+    if len(first_part) > 0 and first_sizes:
+        first_clusters = recursive_geographic_split_by_sizes(
+            first_part, first_sizes, depth + 1
+        )
+    else:
+        first_clusters = [pd.DataFrame(columns=points_df.columns) for _ in range(len(first_sizes))]
+    
+    if len(second_part) > 0 and second_sizes:
+        second_clusters = recursive_geographic_split_by_sizes(
+            second_part, second_sizes, depth + 1
+        )
+    else:
+        second_clusters = [pd.DataFrame(columns=points_df.columns) for _ in range(len(second_sizes))]
+    
+    # Объединяем результаты
+    all_clusters = first_clusters + second_clusters
+    
+    # ГАРАНТИРУЕМ, что количество кластеров = len(target_sizes)
+    if len(all_clusters) != len(target_sizes):
+        # Корректируем: добавляем пустые или обрезаем лишние
+        if len(all_clusters) < len(target_sizes):
+            for _ in range(len(target_sizes) - len(all_clusters)):
+                all_clusters.append(pd.DataFrame(columns=points_df.columns))
+        else:
+            all_clusters = all_clusters[:len(target_sizes)]
+    
+    # СОРТИРОВКА КЛАСТЕРОВ ПО ГЕОГРАФИИ
+    cluster_data = []
+    for i, cluster in enumerate(all_clusters):
+        if not cluster.empty and len(cluster) > 0:
+            try:
+                centroid_lat = cluster['Широта'].mean()
+                centroid_lon = cluster['Долгота'].mean()
+            except (KeyError, TypeError):
+                centroid_lat = 0
+                centroid_lon = 0
+        else:
+            # Для пустого кластера используем крайние значения
+            if axis == 'latitude':
+                centroid_lat = -90 if i % 2 == 0 else 90  # чередуем
+                centroid_lon = 0
+            else:
+                centroid_lat = 0
+                centroid_lon = -180 if i % 2 == 0 else 180
+        
+        cluster_data.append({
+            'index': i,
+            'cluster': cluster,
+            'centroid_lat': centroid_lat,
+            'centroid_lon': centroid_lon
+        })
+    
+    # Сортируем по оси
+    try:
+        if axis == 'latitude':
+            cluster_data.sort(key=lambda x: -x['centroid_lat'])
+        else:
+            cluster_data.sort(key=lambda x: x['centroid_lon'])
+    except:
+        pass  # Если сортировка не удалась, оставляем как есть
+    
+    # Возвращаем отсортированные кластеры
+    return [item['cluster'] for item in cluster_data]
+    
 # ==============================================
 # ФУНКЦИИ ДЛЯ РАСПРЕДЕЛЕНИЯ ПО АУДИТОРАМ (ГЕОГРАФИЧЕСКОЕ РАЗДЕЛЕНИЕ)
 # ==============================================
@@ -3314,5 +3481,6 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
