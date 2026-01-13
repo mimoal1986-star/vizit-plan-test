@@ -408,6 +408,61 @@ def get_weeks_in_quarter(year, quarter):
         current_date = week_end + timedelta(days=1)
     
     return weeks
+    
+def calculate_weekly_targets(total_points, year, quarter, coefficients):
+    """
+    Рассчитывает, сколько точек должно быть в каждую неделю квартала
+    с учетом коэффициентов нагрузки.
+    """
+    weeks_info = get_weeks_in_quarter(year, quarter)
+    if not weeks_info:
+        return []
+    
+    n_weeks = len(weeks_info)
+    
+    # 1. Базовая нагрузка
+    base_per_week = total_points / n_weeks
+    
+    # 2. Применяем коэффициенты (гарантируем минимум 1 точку)
+    weekly_targets = []
+    for i in range(n_weeks):
+        coefficient = coefficients[i % len(coefficients)]
+        raw_target = base_per_week * coefficient
+        weekly_target = max(1, int(round(raw_target)))  # минимум 1
+        weekly_targets.append(weekly_target)
+    
+    # 3. Быстрая корректировка суммы
+    current_sum = sum(weekly_targets)
+    difference = total_points - current_sum
+    
+    if difference != 0:
+        # Сортируем недели по "эластичности" (насколько можно изменить)
+        # Сначала те, где больше отклонение от базовой нагрузки
+        week_indices = list(range(n_weeks))
+        week_indices.sort(
+            key=lambda idx: abs(weekly_targets[idx] - base_per_week),
+            reverse=True
+        )
+        
+        for idx in week_indices:
+            if difference == 0:
+                break
+                
+            if difference > 0:
+                # Добавляем точку
+                weekly_targets[idx] += 1
+                difference -= 1
+            elif difference < 0 and weekly_targets[idx] > 1:
+                # Убираем точку (но не ниже 1)
+                weekly_targets[idx] -= 1
+                difference += 1
+    
+    # Финальная проверка
+    if sum(weekly_targets) != total_points:
+        # Последняя корректировка: первую неделю делаем "мусорной"
+        weekly_targets[0] += (total_points - sum(weekly_targets))
+    
+    return weekly_targets
 
 # ==============================================
 # КЛАСС ДЛЯ ОПТИМИЗАЦИИ МАРШРУТОВ ПО ДНЯМ
@@ -3259,4 +3314,5 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
