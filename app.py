@@ -1809,6 +1809,109 @@ def convert_clusters_to_weekly_plan(weekly_clusters_df, points_df):
     
     return grouped[column_order]
 
+def create_geographic_daily_routes(points_df, weekly_clusters_df):
+    """
+    Создает ежедневные маршруты на основе недельных географических кластеров.
+    Каждая неделя делится на 5 географических суб-кластеров (дней).
+    """
+    
+    if weekly_clusters_df.empty:
+        return pd.DataFrame()
+    
+    results = []
+    
+    # 1. Группируем по аудиторам и неделям
+    grouped = weekly_clusters_df.groupby(['Аудитор', 'Неделя'])
+    
+    for (auditor, week_num), week_points in grouped:
+        # 2. Получаем все точки этой недели у этого аудитора
+        week_point_ids = week_points['ID_Точки'].tolist()
+        week_data = points_df[points_df['ID_Точки'].isin(week_point_ids)].copy()
+        
+        if week_data.empty or len(week_data) < 1:
+            continue
+        
+        # 3. Делим недельный кластер на 5 дней (географически)
+        # Вычисляем размеры для каждого дня
+        n_points = len(week_data)
+        base_size = n_points // 5
+        remainder = n_points % 5
+        
+        daily_targets = [base_size] * 5
+        for i in range(remainder):
+            daily_targets[i] += 1
+        
+        # Делим географически
+        daily_clusters = recursive_geographic_split_by_sizes(week_data, daily_targets)
+        
+        # 4. Назначаем дни недели (понедельник-пятница)
+        days_of_week = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница']
+        
+        for day_idx, (day_cluster, day_name) in enumerate(zip(daily_clusters, days_of_week)):
+            if day_cluster.empty or len(day_cluster) == 0:
+                continue
+            
+            # 5. Преобразуем в список словарей для greedy_route
+            try:
+                day_points_list = day_cluster.to_dict('records')
+            except:
+                continue
+            
+            # 6. Строим оптимальный маршрут внутри дня
+            try:
+                optimized_route = WeeklyRouteOptimizer.greedy_route(day_points_list)
+            except:
+                # Если оптимизация не сработала, используем исходный порядок
+                optimized_route = day_points_list
+            
+            # 7. Получаем дату начала недели (понедельник)
+            try:
+                start_date = week_points['Дата_начала_недели'].iloc[0]
+                if hasattr(start_date, 'strftime'):
+                    date_str = start_date.strftime('%Y%m%d')
+                else:
+                    date_str = str(start_date).replace('-', '')[:8]
+            except:
+                date_str = f"2025{week_num:02d}01"  # fallback
+            
+            # 8. Добавляем в результаты в формате EasyMerch
+            for point in optimized_route:
+                row = {
+                    'Address': point.get('Адрес', ''),
+                    'L1 Name': point.get('Название_Точки', point['ID_Точки']),
+                    'ЧИСЛО визитов в НЕДЕЛЮ': 1,
+                    'Login пользователя': auditor,
+                    'Цикл посещения': week_num,
+                    'Дата начала цикла посещения': date_str,
+                    'Широта': f"{point.get('Широта', 0):.6f}",
+                    'Долгота': f"{point.get('Долгота', 0):.6f}"
+                }
+                
+                # Добавляем отметки для дней недели
+                for day_col in ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']:
+                    row[day_col] = 1 if day_col == day_name else ''
+                
+                results.append(row)
+    
+    if not results:
+        return pd.DataFrame()
+    
+    # Создаём финальный DataFrame
+    routes_df = pd.DataFrame(results)
+    
+    # Упорядочиваем колонки
+    column_order = [
+        'Address', 'L1 Name', 'ЧИСЛО визитов в НЕДЕЛЮ', 'Login пользователя',
+        'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье',
+        'Цикл посещения', 'Дата начала цикла посещения', 'Широта', 'Долгота'
+    ]
+    
+    # Оставляем только существующие колонки
+    column_order = [col for col in column_order if col in routes_df.columns]
+    
+    return routes_df[column_order]
+    
+
 # ==============================================
 # ФУНКЦИИ ДЛЯ РАСПРЕДЕЛЕНИЯ ПО АУДИТОРАМ (ГЕОГРАФИЧЕСКОЕ РАЗДЕЛЕНИЕ)
 # ==============================================
@@ -2882,19 +2985,22 @@ if calculate_button:
         
         with st.spinner("🗺️ Оптимизация маршрутов по дням недели..."):
             try:
-                # Создаем таблицу с маршрутами
-                routes_df = create_weekly_route_schedule(
-                    points_df,
-                    points_assignment_df,
-                    auditors_df,  # ← ТОЛЬКО 5 АРГУМЕНТОВ!
-                    year,
-                    quarter
-                )
+                # Используем НОВУЮ географическую логику, если есть кластеры
+                if 'weekly_clusters_df' in st.session_state and not st.session_state.weekly_clusters_df.empty:
+                    routes_df = create_geographic_daily_routes(
+                        points_df, st.session_state.weekly_clusters_df
+                    )
+                    method_used = "географические кластеры"
+                else:
+                    # Fallback к старой логике
+                    routes_df = create_weekly_route_schedule(
+                        points_df, points_assignment_df, auditors_df, year, quarter
+                    )
+                    method_used = "старая логика"
                 
                 if not routes_df.empty:
                     st.session_state.routes_df = routes_df
-                    st.success(f"✅ Построены маршруты: {len(routes_df)} записей")
-                    st.info("📋 Маршруты доступны во вкладке 'План посещений' для выгрузки в формате EasyMerch")
+                    st.success(f"✅ Построены маршруты ({method_used}): {len(routes_df)} записей")
                 else:
                     st.warning("⚠️ Не удалось построить маршруты")
                     
@@ -2902,6 +3008,7 @@ if calculate_button:
                 st.error(f"❌ Ошибка при оптимизации маршрутов: {str(e)}")
                 import traceback
                 st.error(f"Детали ошибки:\n{traceback.format_exc()}")
+                
 
         # ==============================================
         # ПОЛНЫЙ РАСЧЕТ СО СТАТИСТИКОЙ
@@ -3682,6 +3789,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
