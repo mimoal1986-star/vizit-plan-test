@@ -1738,6 +1738,77 @@ def create_weekly_geographic_clusters(points_assignment_df, points_df, year, qua
     
     return result_df
 
+def convert_clusters_to_weekly_plan(weekly_clusters_df, points_df):
+    """
+    Преобразует DataFrame с недельными кластерами в формат weekly plan.
+    Совместимость с существующей системой.
+    
+    Возвращает DataFrame в формате detailed_plan_df:
+    ['Город', 'Полигон', 'Аудитор', 'ISO_Неделя', 
+     'Дата_начала', 'Дата_окончания', 'План_посещений',
+     'Факт_посещений', '%_выполнения']
+    """
+    
+    if weekly_clusters_df.empty:
+        return pd.DataFrame()
+    
+    # 1. Группируем по аудитору и неделе
+    grouped = weekly_clusters_df.groupby([
+        'Аудитор', 
+        'Неделя', 
+        'Дата_начала_недели', 
+        'Дата_окончания_недели'
+    ]).agg({
+        'ID_Точки': 'count',
+        'Кластер_номер': 'first'
+    }).reset_index()
+    
+    # 2. Переименовываем для совместимости
+    grouped = grouped.rename(columns={
+        'ID_Точки': 'План_посещений',
+        'Неделя': 'ISO_Неделя',
+        'Дата_начала_недели': 'Дата_начала',
+        'Дата_окончания_недели': 'Дата_окончания'
+    })
+    
+    # 3. Добавляем обязательные колонки
+    grouped['Город'] = 'Неизвестно'
+    grouped['Полигон'] = 'Гео-кластер'
+    grouped['Факт_посещений'] = 0
+    grouped['%_выполнения'] = 0.0
+    
+    # 4. Определяем город для каждого аудитора
+    # (берем город первой точки аудитора)
+    for auditor in grouped['Аудитор'].unique():
+        auditor_points = weekly_clusters_df[
+            weekly_clusters_df['Аудитор'] == auditor
+        ]
+        
+        if not auditor_points.empty:
+            # Берём первую точку аудитора
+            first_point_id = auditor_points.iloc[0]['ID_Точки']
+            
+            # Ищем город этой точки
+            city_match = points_df[points_df['ID_Точки'] == first_point_id]
+            if not city_match.empty:
+                city = city_match.iloc[0]['Город']
+                grouped.loc[grouped['Аудитор'] == auditor, 'Город'] = city
+    
+    # 5. Упорядочиваем колонки как в оригинальном detailed_plan_df
+    column_order = [
+        'Город', 
+        'Полигон', 
+        'Аудитор', 
+        'ISO_Неделя',
+        'Дата_начала', 
+        'Дата_окончания',
+        'План_посещений', 
+        'Факт_посещений', 
+        '%_выполнения'
+    ]
+    
+    return grouped[column_order]
+
 # ==============================================
 # ФУНКЦИИ ДЛЯ РАСПРЕДЕЛЕНИЯ ПО АУДИТОРАМ (ГЕОГРАФИЧЕСКОЕ РАЗДЕЛЕНИЕ)
 # ==============================================
@@ -2758,18 +2829,40 @@ if calculate_button:
             st.success(f"✅ Точки распределены по {len(polygons_info)} полигонам")
             st.success(f"✅ Сохранено {len(points_assignment_df)} назначений точек")
         
-        with st.spinner("🔄 Распределение посещений по неделям..."):
-            # Распределяем посещения по неделям
-            detailed_plan_df = distribute_visits_by_weeks(
+        with st.spinner("🔄 Создание недельных географических кластеров..."):
+            # 1. Создаем географические кластеры
+            weekly_clusters_df = create_weekly_geographic_clusters(
                 points_assignment_df, points_df, year, quarter, coefficients
             )
             
-            if detailed_plan_df.empty:
-                st.error("❌ Не удалось распределить посещения по неделям")
-                st.stop()
+            if weekly_clusters_df.empty:
+                st.error("❌ Не удалось создать недельные кластеры. Используем старую логику.")
+                # Fallback к старой логике
+                detailed_plan_df = distribute_visits_by_weeks(
+                    points_assignment_df, points_df, year, quarter, coefficients
+                )
+            else:
+                # Сохраняем новые данные
+                st.session_state.weekly_clusters_df = weekly_clusters_df
+                
+                # 2. Конвертируем в формат weekly plan (для совместимости)
+                detailed_plan_df = convert_clusters_to_weekly_plan(
+                    weekly_clusters_df, points_df
+                )
+                
+                if detailed_plan_df.empty:
+                    st.error("❌ Не удалось преобразовать кластеры. Используем старую логику.")
+                    detailed_plan_df = distribute_visits_by_weeps(
+                        points_assignment_df, points_df, year, quarter, coefficients
+                    )
             
+            # Сохраняем результат (в любом случае)
             st.session_state.detailed_plan_df = detailed_plan_df
-            st.success(f"✅ Распределено {len(detailed_plan_df)} записей по неделям")
+            
+            if not weekly_clusters_df.empty:
+                st.success(f"✅ Создано {len(weekly_clusters_df)} распределений точек по неделям")
+            else:
+                st.success(f"✅ Распределено {len(detailed_plan_df)} записей по неделям (старая логика)")
 
         # Показываем краткую статистику распределения
         col1, col2, col3, col4 = st.columns(4)
@@ -3589,6 +3682,7 @@ if st.session_state.plan_calculated:
                   f"{len(st.session_state.polygons) if st.session_state.polygons else 0} полигонов, "
                   f"{len(st.session_state.auditors_df) if st.session_state.auditors_df is not None else 0} аудиторов")
     current_tab += 1
+
 
 
 
